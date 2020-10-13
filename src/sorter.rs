@@ -213,6 +213,7 @@ where MF: Fn(&[u8], &[Vec<u8>]) -> Result<Vec<u8>, U>
     fn merge_chunks(&mut self) -> Result<(), Error<U>> {
         debug!("merging {} chunks...", self.chunks.len());
         let before_merge = Instant::now();
+        let original_nb_chunks = self.chunks.len();
 
         let file = tempfile::tempfile()?;
         let mut writer = WriterBuilder::new()
@@ -241,7 +242,7 @@ where MF: Fn(&[u8], &[Vec<u8>]) -> Result<Vec<u8>, U>
         let file = writer.into_inner()?;
         self.chunks.push(file);
 
-        debug!("merging {} chunks took {:.02?}", self.chunks.len(), before_merge.elapsed());
+        debug!("merging {} chunks took {:.02?}", original_nb_chunks, before_merge.elapsed());
 
         Ok(())
     }
