@@ -1,0 +1,177 @@
+use std::borrow::Cow;
+use std::io::{self, ErrorKind::UnexpectedEof};
+use std::mem;
+
+use byteorder::{ReadBytesExt, BigEndian};
+
+use crate::compression::{decompress, CompressionType};
+use crate::varint::varint_decode32;
+
+pub struct Reader<R> {
+    compression_type: CompressionType,
+    reader: R,
+    current_block: Option<BlockReader>,
+}
+
+impl<R: io::Read> Reader<R> {
+    pub fn new(mut reader: R) -> io::Result<Reader<R>> {
+        // TODO don't panic here!!!
+        let compression = reader.read_u8()?;
+        let compression_type = CompressionType::from_u8(compression).expect("invalid compression type");
+        let current_block = BlockReader::new(&mut reader, compression_type)?;
+        Ok(Reader { compression_type, reader, current_block })
+    }
+
+    pub fn compression_type(&self) -> CompressionType {
+        self.compression_type
+    }
+
+    pub fn next(&mut self) -> io::Result<Option<(&[u8], &[u8])>> {
+        match &mut self.current_block {
+            Some(block) => {
+                match block.next()? {
+                    Some((key, val)) => {
+                        // This is a trick to make the compiler happy...
+                        // https://github.com/rust-lang/rust/issues/47680
+                        let key: &'static _ = unsafe { mem::transmute(key) };
+                        let val: &'static _ = unsafe { mem::transmute(val) };
+                        Ok(Some((key, val)))
+                    },
+                    None => {
+                        block.read_from(&mut self.reader)?;
+                        block.next()
+                    },
+                }
+            },
+            None => Ok(None),
+        }
+    }
+}
+
+struct BlockReader {
+    compression_type: CompressionType,
+    buffer: Vec<u8>,
+    offset: usize,
+}
+
+impl BlockReader {
+    fn new<R: io::Read>(reader: &mut R, _type: CompressionType) -> io::Result<Option<BlockReader>> {
+        let mut block_reader = BlockReader {
+            compression_type: _type,
+            buffer: Vec::new(),
+            offset: 0,
+        };
+
+        if block_reader.read_from(reader)? {
+            Ok(Some(block_reader))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Returns `true` if it was able to read a new BlockReader.
+    fn read_from<R: io::Read>(&mut self, mut reader: &mut R) -> io::Result<bool> {
+        let block_len = match reader.read_u64::<BigEndian>() {
+            Ok(block_len) => block_len,
+            Err(e) if e.kind() == UnexpectedEof => return Ok(false),
+            Err(e) => return Err(e),
+        };
+
+        // We reset the cursor's position and decompress
+        // the block into the cursor's buffer.
+        self.offset = 0;
+        self.buffer.resize(block_len as usize, 0);
+        reader.read_exact(&mut self.buffer)?;
+
+        match decompress(self.compression_type, &self.buffer)? {
+            Cow::Owned(vec) => self.buffer = vec,
+            Cow::Borrowed(_) => (),
+        };
+
+        Ok(true)
+    }
+
+    fn next(&mut self) -> io::Result<Option<(&[u8], &[u8])>> {
+        if self.buffer.len() == self.offset {
+            return Ok(None);
+        }
+
+        // Read the key length.
+        let mut key_len = 0;
+        let len = varint_decode32(&self.buffer[self.offset..], &mut key_len);
+        self.offset += len;
+
+        // Read the value length.
+        let mut val_len = 0;
+        let len = varint_decode32(&self.buffer[self.offset..], &mut val_len);
+        self.offset += len;
+
+        // Read the key itself.
+        let key = &self.buffer[self.offset..self.offset + key_len as usize];
+        self.offset += key_len as usize;
+
+        // Read the value itself.
+        let val = &self.buffer[self.offset..self.offset + val_len as usize];
+        self.offset += val_len as usize;
+
+        Ok(Some((key, val)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::writer::Writer;
+
+    #[test]
+    fn no_compression() {
+        let mut wb = Writer::builder();
+        let mut writer = wb.build(Vec::new()).unwrap();
+
+        for x in 0..2000u32 {
+            let x = x.to_be_bytes();
+            writer.insert(&x, &x).unwrap();
+        }
+
+        let bytes = writer.into_inner().unwrap();
+        assert_ne!(bytes.len(), 0);
+
+        let mut reader = Reader::new(bytes.as_slice()).unwrap();
+        let mut x: u32 = 0;
+
+        while let Some((k, v)) = reader.next().unwrap() {
+            assert_eq!(k, x.to_be_bytes());
+            assert_eq!(v, x.to_be_bytes());
+            x += 1;
+        }
+
+        assert_eq!(x, 2000);
+    }
+
+    #[cfg(feature = "snappy")]
+    #[test]
+    fn snappy_compression() {
+        let mut wb = Writer::builder();
+        wb.compression_type(CompressionType::Snappy);
+        let mut writer = wb.build(Vec::new()).unwrap();
+
+        for x in 0..2000u32 {
+            let x = x.to_be_bytes();
+            writer.insert(&x, &x).unwrap();
+        }
+
+        let bytes = writer.into_inner().unwrap();
+        assert_ne!(bytes.len(), 0);
+
+        let mut reader = Reader::new(bytes.as_slice()).unwrap();
+        let mut x: u32 = 0;
+
+        while let Some((k, v)) = reader.next().unwrap() {
+            assert_eq!(k, x.to_be_bytes());
+            assert_eq!(v, x.to_be_bytes());
+            x += 1;
+        }
+
+        assert_eq!(x, 2000);
+    }
+}

@@ -92,14 +92,16 @@ impl<W: io::Write> Writer<W> {
     }
 
     pub fn into_inner(mut self) -> io::Result<W> {
-        let buffer = self.block_builder.finish();
-        let buffer = buffer.as_ref();
+        if !self.block_builder.is_empty() {
+            let buffer = self.block_builder.finish();
+            let buffer = buffer.as_ref();
 
-        // Compress, write the compressed block length then the compressed block itself.
-        let buffer = compress(self.compression_type, self.compression_level, buffer.as_ref())?;
-        let block_len = buffer.len().try_into().unwrap();
-        self.writer.write_u64::<BigEndian>(block_len)?;
-        self.writer.write_all(&buffer)?;
+            // Compress, write the compressed block length then the compressed block itself.
+            let buffer = compress(self.compression_type, self.compression_level, buffer.as_ref())?;
+            let block_len = buffer.len().try_into().unwrap();
+            self.writer.write_u64::<BigEndian>(block_len)?;
+            self.writer.write_all(&buffer)?;
+        }
 
         Ok(self.writer)
     }

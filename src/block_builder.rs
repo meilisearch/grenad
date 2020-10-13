@@ -20,6 +20,10 @@ impl BlockBuilder {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
+
     /// Insert a key that must be greater than the previously added one.
     /// Returns `true` when the block size is reached and the block builder must be consumed.
     pub fn insert(&mut self, key: &[u8], val: &[u8]) -> bool {
