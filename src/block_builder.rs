@@ -1,7 +1,7 @@
 use std::cmp;
 use crate::varint::varint_encode32;
 
-pub const DEFAULT_BLOCK_SIZE: usize = 4096;
+pub const DEFAULT_BLOCK_SIZE: usize = 8192;
 pub const MIN_BLOCK_SIZE: usize = 1024;
 
 pub struct BlockBuilder {
