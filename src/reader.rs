@@ -38,7 +38,9 @@ impl<R: io::Read> Reader<R> {
                         Ok(Some((key, val)))
                     },
                     None => {
-                        block.read_from(&mut self.reader)?;
+                        if !block.read_from(&mut self.reader)? {
+                            return Ok(None);
+                        }
                         block.next()
                     },
                 }
