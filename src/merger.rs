@@ -193,7 +193,7 @@ where R: io::Read,
     }
 }
 
-
+#[cfg(feature = "file-fuse")]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,7 +205,6 @@ mod tests {
         Ok(vals[0].to_vec())
     }
 
-    #[cfg(feature = "file-fuse")]
     #[test]
     fn file_fusing() {
         use crate::file_fuse::FileFuse;

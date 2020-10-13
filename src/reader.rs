@@ -130,7 +130,6 @@ impl BlockReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::OpenOptions;
     use crate::writer::Writer;
 
     #[test]
@@ -189,6 +188,7 @@ mod tests {
     #[test]
     fn file_fusing() {
         use crate::file_fuse::FileFuse;
+        use std::fs::OpenOptions;
         use std::io::{Seek, SeekFrom};
 
         let file = OpenOptions::new()

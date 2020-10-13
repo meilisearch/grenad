@@ -1,11 +1,8 @@
 use std::fs::File;
-use std::io::{self, ErrorKind, Read, Seek, SeekFrom};
-use std::os::unix::io::AsRawFd;
+use std::io::{self, Read};
 
-use nix::errno::Errno;
-use nix::fcntl::{fallocate, FallocateFlags};
-
-const BLOCK_SIZE: u64 = 4096;
+pub const BLOCK_SIZE: u64 = 4096;
+pub const DEFAULT_SHRINK_SIZE: u64 = BLOCK_SIZE * 1024; // 4 KB
 
 pub struct FileFuse {
     file: File,
@@ -15,7 +12,7 @@ pub struct FileFuse {
 
 impl FileFuse {
     pub fn new(file: File) -> FileFuse {
-        FileFuse::with_shrink_size(file, BLOCK_SIZE * 1024) // 4 KB
+        FileFuse::with_shrink_size(file, DEFAULT_SHRINK_SIZE)
     }
 
     pub fn with_shrink_size(file: File, size: u64) -> FileFuse {
@@ -27,8 +24,15 @@ impl FileFuse {
     }
 }
 
+#[cfg(feature = "file-fuse")]
 impl Read for FileFuse {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        use std::io::{ErrorKind, Seek, SeekFrom};
+        use std::os::unix::io::AsRawFd;
+
+        use nix::errno::Errno;
+        use nix::fcntl::{fallocate, FallocateFlags};
+
         let count = self.file.read(buf)?;
         self.consumed += count as u64;
 
@@ -51,6 +55,16 @@ impl Read for FileFuse {
     }
 }
 
+#[cfg(not(feature = "file-fuse"))]
+impl Read for FileFuse {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let _ = self.consumed;
+        let _ = self.shrink_size;
+        self.file.read(buf)
+    }
+}
+
+#[cfg(feature = "file-fuse")]
 #[cfg(test)]
 mod tests {
     use super::*;

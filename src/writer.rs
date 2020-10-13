@@ -54,6 +54,10 @@ impl WriterBuilder {
             writer
         })
     }
+
+    pub fn memory(&mut self) -> Writer<Vec<u8>> {
+        self.build(Vec::new()).unwrap()
+    }
 }
 
 pub struct Writer<W> {
@@ -63,6 +67,12 @@ pub struct Writer<W> {
     writer: W,
 }
 
+impl Writer<Vec<u8>> {
+    pub fn memory() -> Writer<Vec<u8>> {
+        WriterBuilder::new().memory()
+    }
+}
+
 impl Writer<()> {
     pub fn builder() -> WriterBuilder {
         WriterBuilder::default()
@@ -70,6 +80,10 @@ impl Writer<()> {
 }
 
 impl<W: io::Write> Writer<W> {
+    pub fn new(writer: W) -> io::Result<Writer<W>> {
+        WriterBuilder::new().build(writer)
+    }
+
     pub fn insert<A, B>(&mut self, key: A, val: B) -> io::Result<()>
     where
         A: AsRef<[u8]>,
