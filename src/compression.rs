@@ -1,5 +1,7 @@
 use std::borrow::Cow;
-use std::io;
+use std::error::Error;
+use std::{fmt, io};
+use std::str::FromStr;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
@@ -25,6 +27,32 @@ impl CompressionType {
         }
     }
 }
+
+impl FromStr for CompressionType {
+    type Err = InvalidCompressionType;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        match name {
+            "snappy" => Ok(CompressionType::Snappy),
+            "zlib" => Ok(CompressionType::Zlib),
+            "lz4" => Ok(CompressionType::Lz4),
+            "lz4hc" => Ok(CompressionType::Lz4hc),
+            "zstd" => Ok(CompressionType::Zstd),
+            _ => Err(InvalidCompressionType),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct InvalidCompressionType;
+
+impl fmt::Display for InvalidCompressionType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("Invalid compression type")
+    }
+}
+
+impl Error for InvalidCompressionType {}
 
 pub fn decompress(type_: CompressionType, data: &[u8]) -> io::Result<Cow<[u8]>> {
     match type_ {
