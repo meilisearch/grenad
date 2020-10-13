@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::io::{self, ErrorKind::UnexpectedEof};
+use std::io::{self, ErrorKind};
 use std::mem;
 
 use byteorder::{ReadBytesExt, BigEndian};
@@ -15,9 +15,11 @@ pub struct Reader<R> {
 
 impl<R: io::Read> Reader<R> {
     pub fn new(mut reader: R) -> io::Result<Reader<R>> {
-        // TODO don't panic here!!!
         let compression = reader.read_u8()?;
-        let compression_type = CompressionType::from_u8(compression).expect("invalid compression type");
+        let compression_type = match CompressionType::from_u8(compression) {
+            Some(compression_type) => compression_type,
+            None => return Err(io::Error::new(ErrorKind::Other, "invalid compression type")),
+        };
         let current_block = BlockReader::new(&mut reader, compression_type)?;
         Ok(Reader { compression_type, reader, current_block })
     }
@@ -48,6 +50,10 @@ impl<R: io::Read> Reader<R> {
             None => Ok(None),
         }
     }
+
+    pub fn into_inner(self) -> R {
+        self.reader
+    }
 }
 
 struct BlockReader {
@@ -72,10 +78,10 @@ impl BlockReader {
     }
 
     /// Returns `true` if it was able to read a new BlockReader.
-    fn read_from<R: io::Read>(&mut self, mut reader: &mut R) -> io::Result<bool> {
+    fn read_from<R: io::Read>(&mut self, reader: &mut R) -> io::Result<bool> {
         let block_len = match reader.read_u64::<BigEndian>() {
             Ok(block_len) => block_len,
-            Err(e) if e.kind() == UnexpectedEof => return Ok(false),
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(false),
             Err(e) => return Err(e),
         };
 
@@ -123,11 +129,12 @@ impl BlockReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::OpenOptions;
     use crate::writer::Writer;
 
     #[test]
     fn no_compression() {
-        let mut wb = Writer::builder();
+        let wb = Writer::builder();
         let mut writer = wb.build(Vec::new()).unwrap();
 
         for x in 0..2000u32 {
@@ -175,5 +182,48 @@ mod tests {
         }
 
         assert_eq!(x, 2000);
+    }
+
+    #[cfg(feature = "file-fuse")]
+    #[test]
+    fn file_fusing() {
+        use crate::file_fuse::FileFuse;
+        use std::io::{Seek, SeekFrom};
+
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .write(true)
+            .open("target/reader-file-fusing")
+            .unwrap();
+
+        let wb = Writer::builder();
+        let mut writer = wb.build(file).unwrap();
+
+        for x in 0..2000u32 {
+            let x = x.to_be_bytes();
+            writer.insert(&x, &x).unwrap();
+        }
+
+        let mut file = writer.into_inner().unwrap();
+        assert_ne!(file.metadata().unwrap().len(), 0);
+
+        file.seek(SeekFrom::Start(0)).unwrap();
+        let file = FileFuse::with_shrink_size(file, 4096);
+
+        let mut reader = Reader::new(file).unwrap();
+        let mut x: u32 = 0;
+
+        while let Some((k, v)) = reader.next().unwrap() {
+            assert_eq!(k, x.to_be_bytes());
+            assert_eq!(v, x.to_be_bytes());
+            x += 1;
+        }
+
+        assert_eq!(x, 2000);
+
+        let file = reader.into_inner().into_inner();
+        assert_eq!(file.metadata().unwrap().len(), 0);
     }
 }

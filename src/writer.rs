@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn no_compression() {
-        let mut wb = Writer::builder();
+        let wb = Writer::builder();
         let mut writer = wb.build(Vec::new()).unwrap();
 
         for x in 0..2000u32 {
