@@ -6,6 +6,7 @@ use byteorder::{ReadBytesExt, BigEndian};
 
 use crate::compression::{decompress, CompressionType};
 use crate::varint::varint_decode32;
+use crate::Error;
 
 pub struct Reader<R> {
     compression_type: CompressionType,
@@ -14,11 +15,11 @@ pub struct Reader<R> {
 }
 
 impl<R: io::Read> Reader<R> {
-    pub fn new(mut reader: R) -> io::Result<Reader<R>> {
+    pub fn new(mut reader: R) -> Result<Reader<R>, Error> {
         let compression = reader.read_u8()?;
         let compression_type = match CompressionType::from_u8(compression) {
             Some(compression_type) => compression_type,
-            None => return Err(io::Error::new(ErrorKind::Other, "invalid compression type")),
+            None => return Err(Error::InvalidCompressionType),
         };
         let current_block = BlockReader::new(&mut reader, compression_type)?;
         Ok(Reader { compression_type, reader, current_block })
@@ -28,7 +29,7 @@ impl<R: io::Read> Reader<R> {
         self.compression_type
     }
 
-    pub fn next(&mut self) -> io::Result<Option<(&[u8], &[u8])>> {
+    pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
         match &mut self.current_block {
             Some(block) => {
                 match block.next()? {
@@ -63,7 +64,7 @@ struct BlockReader {
 }
 
 impl BlockReader {
-    fn new<R: io::Read>(reader: &mut R, _type: CompressionType) -> io::Result<Option<BlockReader>> {
+    fn new<R: io::Read>(reader: &mut R, _type: CompressionType) -> Result<Option<BlockReader>, Error> {
         let mut block_reader = BlockReader {
             compression_type: _type,
             buffer: Vec::new(),
@@ -78,11 +79,11 @@ impl BlockReader {
     }
 
     /// Returns `true` if it was able to read a new BlockReader.
-    fn read_from<R: io::Read>(&mut self, reader: &mut R) -> io::Result<bool> {
+    fn read_from<R: io::Read>(&mut self, reader: &mut R) -> Result<bool, Error> {
         let block_len = match reader.read_u64::<BigEndian>() {
             Ok(block_len) => block_len,
             Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(false),
-            Err(e) => return Err(e),
+            Err(e) => return Err(Error::from(e)),
         };
 
         // We reset the cursor's position and decompress
@@ -99,7 +100,7 @@ impl BlockReader {
         Ok(true)
     }
 
-    fn next(&mut self) -> io::Result<Option<(&[u8], &[u8])>> {
+    fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
         if self.buffer.len() == self.offset {
             return Ok(None);
         }

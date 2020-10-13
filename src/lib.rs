@@ -3,6 +3,8 @@
 
 mod block_builder;
 mod compression;
+mod error;
+mod merger;
 mod reader;
 mod varint;
 mod writer;
@@ -11,6 +13,8 @@ mod writer;
 mod file_fuse;
 
 pub use self::compression::CompressionType;
+pub use self::error::Error;
+pub use self::merger::Merger;
 pub use self::reader::Reader;
 pub use self::writer::{Writer, WriterBuilder};
 
