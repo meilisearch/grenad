@@ -48,7 +48,7 @@ impl Read for FileFuse {
                 }
             }
             self.consumed -= self.shrink_size;
-            self.file.seek(SeekFrom::Start(self.consumed))?;
+            self.file.seek(SeekFrom::Current(-(self.shrink_size as i64)))?;
         }
 
         Ok(count)
@@ -68,8 +68,8 @@ impl Read for FileFuse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use std::fs::OpenOptions;
+    use std::io::{Write, Seek, SeekFrom};
 
     #[test]
     fn it_works() {
