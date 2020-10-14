@@ -14,7 +14,7 @@ const DEFAULT_NB_CHUNKS: usize = 25;
 const MIN_NB_CHUNKS: usize = 1;
 
 use crate::file_fuse::DEFAULT_SHRINK_SIZE;
-use crate::{FileFuse, Reader, Error};
+use crate::{FileFuse, FileFuseBuilder, Reader, Error};
 use crate::{Merger, MergerIter};
 use crate::{Writer, WriterBuilder, CompressionType};
 
@@ -25,6 +25,7 @@ pub struct SorterBuilder<MF> {
     pub chunk_compression_type: CompressionType,
     pub chunk_compression_level: u32,
     pub file_fusing_shrink_size: u64,
+    pub enable_fusing: bool,
     pub merge: MF,
 }
 
@@ -36,6 +37,7 @@ impl<MF> SorterBuilder<MF> {
             chunk_compression_type: CompressionType::None,
             chunk_compression_level: 0,
             file_fusing_shrink_size: DEFAULT_SHRINK_SIZE,
+            enable_fusing: false,
             merge,
         }
     }
@@ -64,10 +66,21 @@ impl<MF> SorterBuilder<MF> {
 
     pub fn file_fusing_shrink_size(&mut self, shrink_size: u64) -> &mut Self {
         self.file_fusing_shrink_size = shrink_size;
+        self.enable_fusing = true;
+        self
+    }
+
+    pub fn enable_fusing(&mut self) -> &mut Self {
+        self.enable_fusing = true;
         self
     }
 
     pub fn build(self) -> Sorter<MF> {
+        let mut file_fuse_builder = FileFuseBuilder::new();
+        if self.enable_fusing {
+            file_fuse_builder.shrink_size(self.file_fusing_shrink_size);
+        }
+
         Sorter {
             chunks: Vec::new(),
             entries: Vec::with_capacity(INITIAL_SORTER_VEC_SIZE),
@@ -76,7 +89,7 @@ impl<MF> SorterBuilder<MF> {
             max_nb_chunks: self.max_nb_chunks,
             chunk_compression_type: self.chunk_compression_type,
             chunk_compression_level: self.chunk_compression_level,
-            file_fusing_shrink_size: self.file_fusing_shrink_size,
+            file_fuse_builder,
             merge: self.merge,
         }
     }
@@ -114,7 +127,7 @@ pub struct Sorter<MF> {
     max_nb_chunks: usize,
     chunk_compression_type: CompressionType,
     chunk_compression_level: u32,
-    file_fusing_shrink_size: u64,
+    file_fuse_builder: FileFuseBuilder,
     merge: MF,
 }
 
@@ -222,10 +235,10 @@ where MF: Fn(&[u8], &[Vec<u8>]) -> Result<Vec<u8>, U>
             .build(file)?;
 
         // Drain the chunks to mmap them and store them into a vector.
-        let file_fusing_shrink_size = self.file_fusing_shrink_size;
+        let file_fuse_builder = self.file_fuse_builder;
         let sources: Result<Vec<_>, Error<U>> = self.chunks.drain(..).map(|mut file| {
             file.seek(SeekFrom::Start(0))?;
-            let file = FileFuse::with_shrink_size(file, file_fusing_shrink_size);
+            let file = file_fuse_builder.build(file);
             Reader::new(file).map_err(Error::convert_merge_error)
         }).collect();
 
@@ -259,10 +272,10 @@ where MF: Fn(&[u8], &[Vec<u8>]) -> Result<Vec<u8>, U>
         // Flush the pending unordered entries.
         self.write_chunk()?;
 
-        let file_fusing_shrink_size = self.file_fusing_shrink_size;
+        let file_fuse_builder = self.file_fuse_builder;
         let sources: Result<Vec<_>, Error<U>> = self.chunks.into_iter().map(|mut file| {
             file.seek(SeekFrom::Start(0))?;
-            let file = FileFuse::with_shrink_size(file, file_fusing_shrink_size);
+            let file = file_fuse_builder.build(file);
             Reader::new(file).map_err(Error::convert_merge_error)
         }).collect();
 

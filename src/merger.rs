@@ -230,7 +230,7 @@ mod tests {
             assert_ne!(file.metadata().unwrap().len(), 0);
 
             file.seek(SeekFrom::Start(0)).unwrap();
-            let file = FileFuse::with_shrink_size(file, 4096);
+            let file = FileFuse::builder().shrink_size(4096).build(file);
             let reader = Reader::new(file).unwrap();
             readers.push(reader);
         }

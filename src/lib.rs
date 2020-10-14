@@ -13,7 +13,7 @@ mod writer;
 
 pub use self::compression::CompressionType;
 pub use self::error::Error;
-pub use self::file_fuse::FileFuse;
+pub use self::file_fuse::{FileFuse, FileFuseBuilder};
 pub use self::merger::{MergerBuilder, Merger, MergerIter};
 pub use self::reader::Reader;
 pub use self::sorter::Sorter;
