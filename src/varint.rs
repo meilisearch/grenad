@@ -60,42 +60,6 @@ pub fn varint_decode32(data: &[u8], value: &mut u32) -> usize {
     len as usize
 }
 
-#[must_use]
-pub fn varint_encode64(bytes: &mut [u8], mut value: u64) -> &[u8] {
-    let b = 128;
-
-    let mut i = 0;
-    while value >= b {
-        bytes[i] = ((value & (b - 1)) | b) as u8;
-        value >>= 7;
-        i += 1;
-    }
-    bytes[i] = value as u8;
-
-    &bytes[..i + 1]
-}
-
-pub fn varint_decode64(data: &[u8], value: &mut u64) -> usize {
-    let len = varint_length_packed(&data[..data.len().min(10)]);
-    if len < 5 {
-        let mut tmp = 0;
-        let tmp_len = varint_decode32(data, &mut tmp);
-        *value = tmp as u64;
-        return tmp_len;
-    }
-    let mut val: u64 = ((data[0] & 0x7f) as u64)
-                 | (((data[1] & 0x7f) as u64) << 7)
-                 | (((data[2] & 0x7f) as u64) << 14)
-                 | (((data[3] & 0x7f) as u64) << 21);
-    let mut shift = 28;
-    for i in 4..len as usize {
-        val |= ((data[i] & 0x7f) as u64) << shift;
-        shift += 7;
-    }
-    *value = val;
-    len as usize
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,15 +70,6 @@ mod tests {
             let mut val = 0;
             let buf = varint_encode32(&mut buf, num);
             varint_decode32(buf, &mut val);
-
-            num == val
-        }
-
-        fn qc_codec_u64(num: u64) -> bool {
-            let mut buf = [0; 10];
-            let mut val = 0;
-            let buf = varint_encode64(&mut buf, num);
-            varint_decode64(buf, &mut val);
 
             num == val
         }
