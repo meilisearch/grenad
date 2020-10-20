@@ -1,8 +1,9 @@
+use std::borrow::Cow;
 use std::fs::File;
+use std::io::{Seek, SeekFrom};
 use std::mem::size_of;
 use std::time::Instant;
 use std::{cmp, io};
-use std::io::{Seek, SeekFrom};
 
 use log::debug;
 
@@ -142,7 +143,7 @@ impl<MF> Sorter<MF> {
 }
 
 impl<MF, U> Sorter<MF>
-where MF: Fn(&[u8], &[Vec<u8>]) -> Result<Vec<u8>, U>
+where MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>
 {
     pub fn insert<K, V>(&mut self, key: K, val: V) -> Result<(), Error<U>>
     where K: AsRef<[u8]>,
@@ -183,15 +184,15 @@ where MF: Fn(&[u8], &[Vec<u8>]) -> Result<Vec<u8>, U>
             match current.as_mut() {
                 None => {
                     let key = entry.key().to_vec();
-                    let val = entry.val().to_vec();
+                    let val = Cow::Owned(entry.val().to_vec());
                     current = Some((key, vec![val]));
                 },
                 Some((key, vals)) => {
                     if key == &entry.key() {
-                        vals.push(entry.val().to_vec());
+                        vals.push(Cow::Owned(entry.val().to_vec()));
                     } else {
-                        let merged_val = if vals.len() == 1 {
-                            vals.pop().unwrap()
+                        let merged_val: Vec<u8> = if vals.len() == 1 {
+                            vals.pop().map(Cow::into_owned).unwrap()
                         } else {
                             (self.merge)(&key, &vals).map_err(Error::Merge)?
                         };
@@ -199,7 +200,7 @@ where MF: Fn(&[u8], &[Vec<u8>]) -> Result<Vec<u8>, U>
                         key.clear();
                         vals.clear();
                         key.extend_from_slice(entry.key());
-                        vals.push(entry.val().to_vec());
+                        vals.push(Cow::Owned(entry.val().to_vec()));
                     }
                 }
             }
@@ -207,7 +208,7 @@ where MF: Fn(&[u8], &[Vec<u8>]) -> Result<Vec<u8>, U>
 
         if let Some((key, mut vals)) = current.take() {
             let merged_val = if vals.len() == 1 {
-                vals.pop().unwrap()
+                vals.pop().unwrap().into_owned()
             } else {
                 (self.merge)(&key, &vals).map_err(Error::Merge)?
             };
@@ -289,12 +290,13 @@ where MF: Fn(&[u8], &[Vec<u8>]) -> Result<Vec<u8>, U>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::convert::Infallible;
 
     #[test]
     fn simple() {
-        fn merge(_key: &[u8], vals: &[Vec<u8>]) -> Result<Vec<u8>, ()> {
+        fn merge(_key: &[u8], vals: &[Cow<[u8]>]) -> Result<Vec<u8>, Infallible> {
             assert_ne!(vals.len(), 1);
-            Ok(vals.iter().flatten().cloned().collect())
+            Ok(vals.iter().map(AsRef::as_ref).flatten().cloned().collect())
         }
 
         let mut sorter = SorterBuilder::new(merge)
