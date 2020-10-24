@@ -8,6 +8,7 @@ use crate::compression::{decompress, CompressionType};
 use crate::varint::varint_decode32;
 use crate::Error;
 
+#[derive(Clone)]
 pub struct Reader<R> {
     compression_type: CompressionType,
     reader: R,
@@ -57,6 +58,7 @@ impl<R: io::Read> Reader<R> {
     }
 }
 
+#[derive(Clone)]
 struct BlockReader {
     compression_type: CompressionType,
     buffer: Vec<u8>,
