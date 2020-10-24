@@ -16,5 +16,5 @@ pub use self::error::Error;
 pub use self::file_fuse::{FileFuse, FileFuseBuilder};
 pub use self::merger::{MergerBuilder, Merger, MergerIter};
 pub use self::reader::Reader;
-pub use self::sorter::Sorter;
+pub use self::sorter::{Sorter, SorterBuilder};
 pub use self::writer::{Writer, WriterBuilder};
