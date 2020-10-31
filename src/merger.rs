@@ -196,21 +196,20 @@ where R: io::Read,
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::fs::OpenOptions;
-    use std::convert::Infallible;
-    use crate::writer::Writer;
-
-    fn merge(_key: &[u8], vals: &[Cow<[u8]>]) -> Result<Vec<u8>, Infallible> {
-        assert!(vals.windows(2).all(|win| win[0] == win[1]));
-        Ok(vals[0].to_vec())
-    }
-
     #[test]
     #[cfg(target_os = "linux")]
     fn file_fusing() {
-        use crate::file_fuse::FileFuse;
+        use std::convert::Infallible;
+        use std::fs::OpenOptions;
         use std::io::{Seek, SeekFrom};
+        use crate::writer::Writer;
+        use crate::file_fuse::FileFuse;
+        use super::*;
+
+        fn merge(_key: &[u8], vals: &[Cow<[u8]>]) -> Result<Vec<u8>, Infallible> {
+            assert!(vals.windows(2).all(|win| win[0] == win[1]));
+            Ok(vals[0].to_vec())
+        }
 
         let mut options = OpenOptions::new();
         options.create(true).truncate(true).read(true).write(true);

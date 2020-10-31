@@ -163,6 +163,12 @@ mod tests {
         assert_eq!(x, 2000);
     }
 
+    #[test]
+    fn empty() {
+        let mut reader = Reader::new(&[][..]).unwrap();
+        assert_eq!(reader.next().unwrap(), None);
+    }
+
     #[cfg(feature = "snappy")]
     #[test]
     fn snappy_compression() {
