@@ -17,7 +17,11 @@ pub struct Reader<R> {
 
 impl<R: io::Read> Reader<R> {
     pub fn new(mut reader: R) -> Result<Reader<R>, Error> {
-        let compression = reader.read_u8()?;
+        let compression = match reader.read_u8() {
+            Ok(compression) => compression,
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => CompressionType::None as u8,
+            Err(e) => return Err(Error::from(e)),
+        };
         let compression_type = match CompressionType::from_u8(compression) {
             Some(compression_type) => compression_type,
             None => return Err(Error::InvalidCompressionType),
