@@ -1,14 +1,15 @@
 use std::borrow::Cow;
 use std::fs::File;
-use std::io::{Seek, SeekFrom};
+use std::io::{Seek, SeekFrom, Write};
 use std::mem::size_of;
 use std::time::Instant;
-use std::{cmp, io};
+use std::{cmp, io, mem};
 
 use log::debug;
 
 const INITIAL_SORTER_VEC_SIZE: usize = 131_072; // 128KB
 const DEFAULT_SORTER_MEMORY: usize = 1_073_741_824; // 1GB
+const DEFAULT_SORTER_OUTSOURCE_THREASHOLD: f64 = 0.05; // 5%
 const MIN_SORTER_MEMORY: usize = 10_485_760; // 10MB
 
 const DEFAULT_NB_CHUNKS: usize = 25;
@@ -22,6 +23,7 @@ use crate::{Writer, WriterBuilder, CompressionType};
 #[derive(Debug, Clone, Copy)]
 pub struct SorterBuilder<MF> {
     pub max_memory: usize,
+    pub outsource_threshold: f64,
     pub max_nb_chunks: usize,
     pub chunk_compression_type: CompressionType,
     pub chunk_compression_level: u32,
@@ -34,6 +36,7 @@ impl<MF> SorterBuilder<MF> {
     pub fn new(merge: MF) -> Self {
         SorterBuilder {
             max_memory: DEFAULT_SORTER_MEMORY,
+            outsource_threshold: DEFAULT_SORTER_OUTSOURCE_THREASHOLD,
             max_nb_chunks: DEFAULT_NB_CHUNKS,
             chunk_compression_type: CompressionType::None,
             chunk_compression_level: 0,
@@ -45,6 +48,11 @@ impl<MF> SorterBuilder<MF> {
 
     pub fn max_memory(&mut self, memory: usize) -> &mut Self {
         self.max_memory = cmp::max(memory, MIN_SORTER_MEMORY);
+        self
+    }
+
+    pub fn outsource_threshold(&mut self, threshold: f64) -> &mut Self {
+        self.outsource_threshold = threshold.max(0.0).min(1.0);
         self
     }
 
@@ -85,8 +93,10 @@ impl<MF> SorterBuilder<MF> {
         Sorter {
             chunks: Vec::new(),
             entries: Vec::with_capacity(INITIAL_SORTER_VEC_SIZE),
+            data_source: Outsource::default(),
             entry_bytes: 0,
             max_memory: self.max_memory,
+            outsource_threshold: (self.max_memory as f64 * self.outsource_threshold) as usize,
             max_nb_chunks: self.max_nb_chunks,
             chunk_compression_type: self.chunk_compression_type,
             chunk_compression_level: self.chunk_compression_level,
@@ -96,35 +106,95 @@ impl<MF> SorterBuilder<MF> {
     }
 }
 
-struct Entry {
-    data: Vec<u8>,
-    key_len: usize,
+#[derive(Default)]
+struct Outsource {
+    offset: usize,
+    file: Option<File>,
+}
+
+impl Outsource {
+    pub fn write_data(&mut self, data: &[u8]) -> io::Result<usize> {
+        match &mut self.file {
+            Some(file) => {
+                let offset = self.offset;
+                file.write_all(data)?;
+                self.offset += data.len();
+                Ok(offset)
+            },
+            None => {
+                self.file = Some(tempfile::tempfile()?);
+                self.write_data(data)
+            }
+        }
+    }
+
+    pub fn into_bytes(self) -> io::Result<Box<dyn AsRef<[u8]>>> {
+        match self.file {
+            Some(file) => unsafe {
+                let mmap = memmap::Mmap::map(&file)?;
+                Ok(Box::new(mmap) as Box<dyn AsRef<[u8]>>)
+            },
+            None => Ok(Box::new([])),
+        }
+    }
+}
+
+enum Entry {
+    InMemory {
+        data: Vec<u8>,
+        key_len: usize,
+    },
+    Outsourced {
+        key: Vec<u8>,
+        offset: usize,
+        length: usize,
+    },
 }
 
 impl Entry {
-    pub fn new(key: &[u8], val: &[u8]) -> Entry {
+    pub fn in_memory(key: &[u8], val: &[u8]) -> Entry {
         let mut data = Vec::new();
         data.reserve_exact(key.len() + val.len());
         data.extend_from_slice(key);
         data.extend_from_slice(val);
-        Entry { data, key_len: key.len() }
+        Entry::InMemory { data, key_len: key.len() }
+    }
+
+    pub fn outsourced(key: &[u8], offset: usize, length: usize) -> Entry {
+        Entry::Outsourced { key: key.to_vec(), offset, length }
+    }
+
+    pub fn in_memory_len(&self) -> usize {
+        match self {
+            Entry::InMemory { data, .. } => data.len(),
+            Entry::Outsourced { key, .. } => key.len(),
+        }
     }
 
     pub fn key(&self) -> &[u8] {
-        &self.data[..self.key_len]
+        match self {
+            Entry::InMemory { data, key_len } => &data[..*key_len],
+            Entry::Outsourced { key, .. } => &key,
+        }
     }
 
-    pub fn val(&self) -> &[u8] {
-        &self.data[self.key_len..]
+    pub fn val<'a>(&'a self, source: &'a [u8]) -> &'a [u8] {
+        match self {
+            Entry::InMemory { data, key_len } => &data[*key_len..],
+            Entry::Outsourced { offset, length, .. } => &source[*offset..(offset + length)],
+        }
     }
 }
 
 pub struct Sorter<MF> {
     chunks: Vec<File>,
     entries: Vec<Entry>,
+    /// Contains the data that is too big for the in-memory chunk.
+    data_source: Outsource,
     /// The number of bytes allocated by the entries.
     entry_bytes: usize,
     max_memory: usize,
+    outsource_threshold: usize,
     max_nb_chunks: usize,
     chunk_compression_type: CompressionType,
     chunk_compression_level: u32,
@@ -152,8 +222,14 @@ where MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>
         let key = key.as_ref();
         let val = val.as_ref();
 
-        let ent = Entry::new(key, val);
-        self.entry_bytes += ent.data.len();
+        let ent = if key.len() + val.len() <= self.outsource_threshold {
+            Entry::in_memory(key, val)
+        } else {
+            let offset = self.data_source.write_data(val)?;
+            Entry::outsourced(key, offset, val.len())
+        };
+
+        self.entry_bytes += ent.in_memory_len();
         self.entries.push(ent);
 
         let entries_vec_size = self.entries.capacity() * size_of::<Entry>();
@@ -179,17 +255,20 @@ where MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>
 
         self.entries.sort_unstable_by(|a, b| a.key().cmp(&b.key()));
 
+        let data_source = mem::take(&mut self.data_source).into_bytes()?;
+        let data_source = (*data_source).as_ref();
+
         let mut current = None;
         for entry in self.entries.drain(..) {
             match current.as_mut() {
                 None => {
                     let key = entry.key().to_vec();
-                    let val = Cow::Owned(entry.val().to_vec());
+                    let val = Cow::Owned(entry.val(data_source).to_vec());
                     current = Some((key, vec![val]));
                 },
                 Some((key, vals)) => {
                     if key == &entry.key() {
-                        vals.push(Cow::Owned(entry.val().to_vec()));
+                        vals.push(Cow::Owned(entry.val(data_source).to_vec()));
                     } else {
                         let merged_val: Vec<u8> = if vals.len() == 1 {
                             vals.pop().map(Cow::into_owned).unwrap()
@@ -200,7 +279,7 @@ where MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>
                         key.clear();
                         vals.clear();
                         key.extend_from_slice(entry.key());
-                        vals.push(Cow::Owned(entry.val().to_vec()));
+                        vals.push(Cow::Owned(entry.val(data_source).to_vec()));
                     }
                 }
             }
