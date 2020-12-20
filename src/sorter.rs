@@ -159,7 +159,7 @@ where MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>
         let entries_vec_size = self.entries.len() * size_of::<Entry>();
         if self.entry_bytes + entries_vec_size >= self.max_memory {
             self.write_chunk()?;
-            if self.chunks.len() > self.max_nb_chunks {
+            if self.chunks.len() >= self.max_nb_chunks {
                 self.merge_chunks()?;
             }
         }
