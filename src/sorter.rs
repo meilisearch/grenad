@@ -151,18 +151,21 @@ where MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>
     {
         let key = key.as_ref();
         let val = val.as_ref();
-
         let ent = Entry::new(key, val);
-        self.entry_bytes += ent.data.len();
-        self.entries.push(ent);
 
-        let entries_vec_size = self.entries.len() * size_of::<Entry>();
-        if self.entry_bytes + entries_vec_size >= self.max_memory {
+        // If pushing this new entry makes the store consume too much memory,
+        // we must first dump current entries to disk.
+        let entries_vec_size = self.entries.capacity() * size_of::<Entry>();
+        let one_more_entry = ent.data.len() + size_of::<Entry>();
+        if self.entry_bytes + entries_vec_size + one_more_entry > self.max_memory {
             self.write_chunk()?;
             if self.chunks.len() >= self.max_nb_chunks {
                 self.merge_chunks()?;
             }
         }
+
+        self.entry_bytes += ent.data.len();
+        self.entries.push(ent);
 
         Ok(())
     }
@@ -218,6 +221,12 @@ where MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>
         let file = writer.into_inner()?;
         self.chunks.push(file);
         self.entry_bytes = 0;
+
+        // If the memory consumed by the store is more than the expected,
+        // we must shrink the entries vec.
+        if self.entries.capacity() * size_of::<Entry>() > self.max_memory {
+            self.entries.shrink_to_fit();
+        }
 
         debug!("writing a chunk took {:.02?}", before_write.elapsed());
 
