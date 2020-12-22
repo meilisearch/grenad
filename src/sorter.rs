@@ -223,6 +223,10 @@ where MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>
         self.chunks.push(file);
         self.entry_bytes = 0;
 
+        if self.entries.capacity() * size_of::<Entry>() > self.max_memory {
+            self.entries = Vec::new();
+        }
+
         debug!("writing a chunk took {:.02?}", before_write.elapsed());
 
         Ok(())
