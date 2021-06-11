@@ -3,7 +3,7 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::{BinaryHeap, PeekMut};
 use std::{io, mem};
 
-use crate::{Error, Reader, Writer};
+use crate::{Error, Reader, SliceAtLeast, Writer};
 
 pub struct Entry<R> {
     iter: Reader<R>,
@@ -122,7 +122,7 @@ impl<R: io::Read, MF> Merger<R, MF> {
 impl<R, MF, U> Merger<R, MF>
 where
     R: io::Read,
-    MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>,
+    MF: for<'a> Fn(&[u8], &SliceAtLeast<Cow<'a, [u8]>, 2>) -> Result<Vec<u8>, U>,
 {
     pub fn write_into<W: io::Write>(self, writer: &mut Writer<W>) -> Result<(), Error<U>> {
         let mut iter = self.into_merge_iter().map_err(Error::convert_merge_error)?;
@@ -145,7 +145,7 @@ pub struct MergerIter<R, MF> {
 impl<R, MF, U> MergerIter<R, MF>
 where
     R: io::Read,
-    MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>,
+    MF: for<'a> Fn(&[u8], &SliceAtLeast<Cow<'a, [u8]>, 2>) -> Result<Vec<u8>, U>,
 {
     pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error<U>> {
         self.cur_key.clear();
@@ -182,7 +182,8 @@ where
             self.merged_val = if self.cur_vals.len() == 1 {
                 self.cur_vals.pop().map(Cow::into_owned).unwrap()
             } else {
-                match (self.merge)(&self.cur_key, &self.cur_vals) {
+                let cur_vals = SliceAtLeast::new(&self.cur_vals).unwrap();
+                match (self.merge)(&self.cur_key, cur_vals) {
                     Ok(val) => val,
                     Err(e) => return Err(Error::Merge(e)),
                 }
@@ -200,16 +201,18 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn file_fusing() {
-        use super::*;
-        use crate::file_fuse::FileFuse;
-        use crate::writer::Writer;
         use std::convert::Infallible;
         use std::fs::OpenOptions;
         use std::io::{Seek, SeekFrom};
 
-        fn merge(_key: &[u8], vals: &[Cow<[u8]>]) -> Result<Vec<u8>, Infallible> {
+        use super::*;
+
+        use crate::{FileFuse, SliceAtLeast, Writer};
+
+        fn merge(_key: &[u8], vals: &SliceAtLeast<Cow<[u8]>, 2>) -> Result<Vec<u8>, Infallible> {
             assert!(vals.windows(2).all(|win| win[0] == win[1]));
-            Ok(vals[0].to_vec())
+            let ([first, _second], _tail) = vals.deconstruct_front();
+            Ok(first.to_vec())
         }
 
         let mut options = OpenOptions::new();

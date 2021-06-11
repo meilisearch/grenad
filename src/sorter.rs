@@ -17,7 +17,7 @@ const MIN_NB_CHUNKS: usize = 1;
 use crate::file_fuse::DEFAULT_SHRINK_SIZE;
 use crate::{CompressionType, Writer, WriterBuilder};
 use crate::{Error, FileFuse, FileFuseBuilder, Reader};
-use crate::{Merger, MergerIter};
+use crate::{Merger, MergerIter, SliceAtLeast};
 
 #[derive(Debug, Clone, Copy)]
 pub struct SorterBuilder<MF> {
@@ -144,7 +144,7 @@ impl<MF> Sorter<MF> {
 
 impl<MF, U> Sorter<MF>
 where
-    MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>,
+    MF: for<'a> Fn(&[u8], &SliceAtLeast<Cow<'a, [u8]>, 2>) -> Result<Vec<u8>, U>,
 {
     pub fn insert<K, V>(&mut self, key: K, val: V) -> Result<(), Error<U>>
     where
@@ -196,7 +196,8 @@ where
                         let merged_val: Vec<u8> = if vals.len() == 1 {
                             vals.pop().map(Cow::into_owned).unwrap()
                         } else {
-                            (self.merge)(&key, &vals).map_err(Error::Merge)?
+                            let vals = SliceAtLeast::new(&vals).unwrap();
+                            (self.merge)(&key, vals).map_err(Error::Merge)?
                         };
                         writer.insert(&key, &merged_val)?;
                         key.clear();
@@ -212,7 +213,8 @@ where
             let merged_val = if vals.len() == 1 {
                 vals.pop().map(Cow::into_owned).unwrap()
             } else {
-                (self.merge)(&key, &vals).map_err(Error::Merge)?
+                let vals = SliceAtLeast::new(&vals).unwrap();
+                (self.merge)(&key, vals).map_err(Error::Merge)?
             };
             writer.insert(&key, &merged_val)?;
         }
@@ -304,8 +306,7 @@ mod tests {
 
     #[test]
     fn simple() {
-        fn merge(_key: &[u8], vals: &[Cow<[u8]>]) -> Result<Vec<u8>, Infallible> {
-            assert_ne!(vals.len(), 1);
+        fn merge(_key: &[u8], vals: &SliceAtLeast<Cow<[u8]>, 2>) -> Result<Vec<u8>, Infallible> {
             Ok(vals.iter().map(AsRef::as_ref).flatten().cloned().collect())
         }
 
