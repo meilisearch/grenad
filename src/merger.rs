@@ -100,7 +100,7 @@ impl<R, MF> Merger<R, MF> {
 }
 
 impl<R: io::Read, MF> Merger<R, MF> {
-    pub fn into_merge_iter(self) -> Result<MergerIter<R, MF>, Error> {
+    pub fn into_merge_stream(self) -> Result<MergerStream<R, MF>, Error> {
         let mut heap = BinaryHeap::new();
         for source in self.sources {
             if let Some(entry) = Entry::new(source)? {
@@ -108,7 +108,7 @@ impl<R: io::Read, MF> Merger<R, MF> {
             }
         }
 
-        Ok(MergerIter {
+        Ok(MergerStream {
             merge: self.merge,
             heap,
             cur_key: Vec::new(),
@@ -125,7 +125,7 @@ where
     MF: for<'a> Fn(&[u8], &SliceAtLeast<Cow<'a, [u8]>, 2>) -> Result<Vec<u8>, U>,
 {
     pub fn write_into<W: io::Write>(self, writer: &mut Writer<W>) -> Result<(), Error<U>> {
-        let mut iter = self.into_merge_iter().map_err(Error::convert_merge_error)?;
+        let mut iter = self.into_merge_stream().map_err(Error::convert_merge_error)?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
         }
@@ -133,7 +133,7 @@ where
     }
 }
 
-pub struct MergerIter<R, MF> {
+pub struct MergerStream<R, MF> {
     merge: MF,
     heap: BinaryHeap<Reverse<Entry<R>>>,
     cur_key: Vec<u8>,
@@ -142,21 +142,17 @@ pub struct MergerIter<R, MF> {
     pending: bool,
 }
 
-impl<R, MF, U> MergerIter<R, MF>
+impl<R, MF, U> MergerStream<R, MF>
 where
     R: io::Read,
     MF: for<'a> Fn(&[u8], &SliceAtLeast<Cow<'a, [u8]>, 2>) -> Result<Vec<u8>, U>,
 {
+    #[allow(clippy::should_implement_trait, clippy::type_complexity)]
     pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error<U>> {
         self.cur_key.clear();
         self.cur_vals.clear();
 
-        loop {
-            let mut entry = match self.heap.peek_mut() {
-                Some(e) => e,
-                None => break,
-            };
-
+        while let Some(mut entry) = self.heap.peek_mut() {
             if self.cur_key.is_empty() {
                 self.cur_key.extend_from_slice(&entry.0.key);
                 self.cur_vals.clear();

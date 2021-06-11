@@ -31,7 +31,7 @@ impl BlockBuilder {
         // and save the current key to become the last key.
         match &mut self.last_key {
             Some(last_key) => {
-                assert!(key > &last_key);
+                assert!(key > last_key);
                 last_key.clear();
                 last_key.extend_from_slice(key);
             }

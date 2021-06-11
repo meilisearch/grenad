@@ -16,7 +16,7 @@ mod writer;
 pub use self::compression::CompressionType;
 pub use self::error::Error;
 pub use self::file_fuse::{FileFuse, FileFuseBuilder};
-pub use self::merger::{Merger, MergerBuilder, MergerIter};
+pub use self::merger::{Merger, MergerBuilder, MergerStream};
 pub use self::reader::Reader;
 pub use self::slice_at_least::SliceAtLeast;
 pub use self::sorter::{Sorter, SorterBuilder};

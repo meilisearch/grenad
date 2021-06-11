@@ -17,7 +17,7 @@ const MIN_NB_CHUNKS: usize = 1;
 use crate::file_fuse::DEFAULT_SHRINK_SIZE;
 use crate::{CompressionType, Writer, WriterBuilder};
 use crate::{Error, FileFuse, FileFuseBuilder, Reader};
-use crate::{Merger, MergerIter, SliceAtLeast};
+use crate::{Merger, MergerStream, SliceAtLeast};
 
 #[derive(Debug, Clone, Copy)]
 pub struct SorterBuilder<MF> {
@@ -179,7 +179,7 @@ where
             .compression_level(self.chunk_compression_level)
             .build(file)?;
 
-        self.entries.sort_unstable_by(|a, b| a.key().cmp(&b.key()));
+        self.entries.sort_unstable_by(|a, b| a.key().cmp(b.key()));
 
         let mut current = None;
         for entry in self.entries.drain(..) {
@@ -190,21 +190,19 @@ where
                     current = Some((key, vec![val]));
                 }
                 Some((key, vals)) => {
-                    if key == &entry.key() {
-                        vals.push(Cow::Owned(entry.val().to_vec()));
-                    } else {
+                    if key != entry.key() {
                         let merged_val: Vec<u8> = if vals.len() == 1 {
                             vals.pop().map(Cow::into_owned).unwrap()
                         } else {
-                            let vals = SliceAtLeast::new(&vals).unwrap();
-                            (self.merge)(&key, vals).map_err(Error::Merge)?
+                            let vals = SliceAtLeast::new(vals).unwrap();
+                            (self.merge)(key, vals).map_err(Error::Merge)?
                         };
                         writer.insert(&key, &merged_val)?;
                         key.clear();
                         vals.clear();
                         key.extend_from_slice(entry.key());
-                        vals.push(Cow::Owned(entry.val().to_vec()));
                     }
+                    vals.push(Cow::Owned(entry.val().to_vec()));
                 }
             }
         }
@@ -256,7 +254,7 @@ where
         builder.extend(sources?);
         let merger = builder.build();
 
-        let mut iter = merger.into_merge_iter().map_err(Error::convert_merge_error)?;
+        let mut iter = merger.into_merge_stream().map_err(Error::convert_merge_error)?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
         }
@@ -270,14 +268,14 @@ where
     }
 
     pub fn write_into<W: io::Write>(self, writer: &mut Writer<W>) -> Result<(), Error<U>> {
-        let mut iter = self.into_iter()?;
+        let mut iter = self.into_stream()?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
         }
         Ok(())
     }
 
-    pub fn into_iter(mut self) -> Result<MergerIter<FileFuse, MF>, Error<U>> {
+    pub fn into_stream(mut self) -> Result<MergerStream<FileFuse, MF>, Error<U>> {
         // Flush the pending unordered entries.
         self.write_chunk()?;
 
@@ -295,7 +293,7 @@ where
         let mut builder = Merger::builder(self.merge);
         builder.extend(sources?);
 
-        builder.build().into_merge_iter().map_err(Error::convert_merge_error)
+        builder.build().into_merge_stream().map_err(Error::convert_merge_error)
     }
 }
 

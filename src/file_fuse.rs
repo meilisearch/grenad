@@ -38,6 +38,12 @@ impl FileFuseBuilder {
     }
 }
 
+impl Default for FileFuseBuilder {
+    fn default() -> FileFuseBuilder {
+        FileFuseBuilder::new()
+    }
+}
+
 pub struct FileFuse {
     file: File,
     consumed: u64,
