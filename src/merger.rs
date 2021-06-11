@@ -1,9 +1,9 @@
 use std::borrow::Cow;
-use std::cmp::{Reverse, Ordering};
+use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::{BinaryHeap, PeekMut};
-use std::{mem, io};
+use std::{io, mem};
 
-use crate::{Error, Writer, Reader};
+use crate::{Error, Reader, Writer};
 
 pub struct Entry<R> {
     iter: Reader<R>,
@@ -14,14 +14,10 @@ pub struct Entry<R> {
 impl<R: io::Read> Entry<R> {
     // also fills the entry
     fn new(iter: Reader<R>) -> Result<Option<Entry<R>>, Error> {
-        let mut entry = Entry {
-            iter,
-            key: Vec::with_capacity(256),
-            val: Vec::with_capacity(256),
-        };
+        let mut entry = Entry { iter, key: Vec::new(), val: Vec::new() };
 
         if !entry.fill()? {
-            return Ok(None)
+            return Ok(None);
         }
 
         Ok(Some(entry))
@@ -36,7 +32,7 @@ impl<R: io::Read> Entry<R> {
                 self.key.extend_from_slice(key);
                 self.val.extend_from_slice(val);
                 Ok(true)
-            },
+            }
             None => Ok(false),
         }
     }
@@ -87,7 +83,7 @@ impl<R, MF> MergerBuilder<R, MF> {
 }
 
 impl<R, MF> Extend<Reader<R>> for MergerBuilder<R, MF> {
-    fn extend<T: IntoIterator<Item=Reader<R>>>(&mut self, iter: T) {
+    fn extend<T: IntoIterator<Item = Reader<R>>>(&mut self, iter: T) {
         self.sources.extend(iter);
     }
 }
@@ -107,7 +103,6 @@ impl<R: io::Read, MF> Merger<R, MF> {
     pub fn into_merge_iter(self) -> Result<MergerIter<R, MF>, Error> {
         let mut heap = BinaryHeap::new();
         for source in self.sources {
-            // let iter = source.into_iter()?;
             if let Some(entry) = Entry::new(source)? {
                 heap.push(Reverse(entry));
             }
@@ -125,8 +120,9 @@ impl<R: io::Read, MF> Merger<R, MF> {
 }
 
 impl<R, MF, U> Merger<R, MF>
-where R: io::Read,
-      MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>,
+where
+    R: io::Read,
+    MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>,
 {
     pub fn write_into<W: io::Write>(self, writer: &mut Writer<W>) -> Result<(), Error<U>> {
         let mut iter = self.into_merge_iter().map_err(Error::convert_merge_error)?;
@@ -147,8 +143,9 @@ pub struct MergerIter<R, MF> {
 }
 
 impl<R, MF, U> MergerIter<R, MF>
-where R: io::Read,
-      MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>,
+where
+    R: io::Read,
+    MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>,
 {
     pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error<U>> {
         self.cur_key.clear();
@@ -169,7 +166,11 @@ where R: io::Read,
             if self.cur_key == entry.0.key {
                 self.cur_vals.push(Cow::Owned(mem::take(&mut entry.0.val)));
                 match entry.0.fill() {
-                    Ok(filled) => if !filled { PeekMut::pop(entry); },
+                    Ok(filled) => {
+                        if !filled {
+                            PeekMut::pop(entry);
+                        }
+                    }
                     Err(e) => return Err(e.convert_merge_error()),
                 }
             } else {
@@ -199,12 +200,12 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn file_fusing() {
+        use super::*;
+        use crate::file_fuse::FileFuse;
+        use crate::writer::Writer;
         use std::convert::Infallible;
         use std::fs::OpenOptions;
         use std::io::{Seek, SeekFrom};
-        use crate::writer::Writer;
-        use crate::file_fuse::FileFuse;
-        use super::*;
 
         fn merge(_key: &[u8], vals: &[Cow<[u8]>]) -> Result<Vec<u8>, Infallible> {
             assert!(vals.windows(2).all(|win| win[0] == win[1]));

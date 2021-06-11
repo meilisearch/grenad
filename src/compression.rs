@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::error::Error;
-use std::{fmt, io};
 use std::str::FromStr;
+use std::{fmt, io};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
@@ -63,7 +63,7 @@ pub fn decompress(type_: CompressionType, data: &[u8]) -> io::Result<Cow<[u8]>> 
         other => {
             let error = format!("unsupported {:?} decompression", other);
             Err(io::Error::new(io::ErrorKind::Other, error))
-        },
+        }
     }
 }
 
@@ -76,7 +76,7 @@ pub fn compress(type_: CompressionType, level: u32, data: &[u8]) -> io::Result<C
         other => {
             let error = format!("unsupported {:?} decompression", other);
             Err(io::Error::new(io::ErrorKind::Other, error))
-        },
+        }
     }
 }
 
