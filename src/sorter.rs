@@ -5,6 +5,7 @@ use std::mem::size_of;
 use std::time::Instant;
 use std::{cmp, io};
 
+use bytemuck::{cast_slice, cast_slice_mut, Pod, Zeroable};
 use log::debug;
 
 const INITIAL_SORTER_VEC_SIZE: usize = 131_072; // 128KB
@@ -15,13 +16,14 @@ const DEFAULT_NB_CHUNKS: usize = 25;
 const MIN_NB_CHUNKS: usize = 1;
 
 use crate::file_fuse::DEFAULT_SHRINK_SIZE;
-use crate::{FileFuse, FileFuseBuilder, Reader, Error};
+use crate::{CompressionType, Writer, WriterBuilder};
+use crate::{Error, FileFuse, FileFuseBuilder, Reader};
 use crate::{Merger, MergerIter};
-use crate::{Writer, WriterBuilder, CompressionType};
 
 #[derive(Debug, Clone, Copy)]
 pub struct SorterBuilder<MF> {
-    pub max_memory: usize,
+    pub dump_threshold: usize,
+    pub allow_realloc: bool,
     pub max_nb_chunks: usize,
     pub chunk_compression_type: CompressionType,
     pub chunk_compression_level: u32,
@@ -33,7 +35,8 @@ pub struct SorterBuilder<MF> {
 impl<MF> SorterBuilder<MF> {
     pub fn new(merge: MF) -> Self {
         SorterBuilder {
-            max_memory: DEFAULT_SORTER_MEMORY,
+            dump_threshold: DEFAULT_SORTER_MEMORY,
+            allow_realloc: true,
             max_nb_chunks: DEFAULT_NB_CHUNKS,
             chunk_compression_type: CompressionType::None,
             chunk_compression_level: 0,
@@ -43,8 +46,18 @@ impl<MF> SorterBuilder<MF> {
         }
     }
 
-    pub fn max_memory(&mut self, memory: usize) -> &mut Self {
-        self.max_memory = cmp::max(memory, MIN_SORTER_MEMORY);
+    /// The amount of memory to reach that will trigger a memory dump from in memory to disk.
+    pub fn dump_threshold(&mut self, memory: usize) -> &mut Self {
+        self.dump_threshold = cmp::max(memory, MIN_SORTER_MEMORY);
+        self
+    }
+
+    /// Whether the sorter is allowed or not to reallocate the internal vector.
+    ///
+    /// Note that reallocating involve a more important memory usage and disallowing
+    /// it will make the sorter to **always** consume the dump threshold memory.
+    pub fn allow_realloc(&mut self, allow: bool) -> &mut Self {
+        self.allow_realloc = allow;
         self
     }
 
@@ -82,11 +95,17 @@ impl<MF> SorterBuilder<MF> {
             file_fuse_builder.shrink_size(self.file_fusing_shrink_size);
         }
 
+        let capacity = if self.allow_realloc {
+            INITIAL_SORTER_VEC_SIZE
+        } else {
+            self.dump_threshold
+        };
+
         Sorter {
             chunks: Vec::new(),
-            entries: Vec::with_capacity(INITIAL_SORTER_VEC_SIZE),
-            entry_bytes: 0,
-            max_memory: self.max_memory,
+            entries: Entries::with_capacity(capacity),
+            allow_realloc: self.allow_realloc,
+            dump_threshold: self.dump_threshold,
             max_nb_chunks: self.max_nb_chunks,
             chunk_compression_type: self.chunk_compression_type,
             chunk_compression_level: self.chunk_compression_level,
@@ -96,35 +115,159 @@ impl<MF> SorterBuilder<MF> {
     }
 }
 
-struct Entry {
-    data: Vec<u8>,
-    key_len: usize,
+/// Stores entries memory efficiently in a buffer.
+struct Entries {
+    /// The internal buffer that contains the key and data bytes
+    /// on the front of it and the bounds of the buffer on the back.
+    ///
+    /// [----key+data---->--remaining--<--bounds--]
+    ///
+    buffer: Box<[u8]>,
+
+    /// The amount of bytes stored in the buffer.
+    entries_len: usize,
+
+    /// The number of bounds stored in the buffer.
+    bounds_count: usize,
 }
 
-impl Entry {
-    pub fn new(key: &[u8], val: &[u8]) -> Entry {
-        let mut data = Vec::new();
-        data.reserve_exact(key.len() + val.len());
-        data.extend_from_slice(key);
-        data.extend_from_slice(val);
-        Entry { data, key_len: key.len() }
+impl Entries {
+    /// Creates a buffer which will consumes this amount of memory,
+    /// rounded up to the size of one `EntryBound` more.
+    ///
+    /// It will use this amount of memory until it needs to reallocate
+    /// where it will create a new buffer of twice the size of the current one
+    /// copies the entries inside and replace the current one by the new one.
+    ///
+    /// If you want to be sure about the amount of memory used you can use
+    /// the `fits` method.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            buffer: Self::new_buffer(capacity),
+            entries_len: 0,
+            bounds_count: 0,
+        }
     }
 
-    pub fn key(&self) -> &[u8] {
-        &self.data[..self.key_len]
+    /// Clear the entries.
+    pub fn clear(&mut self) {
+        self.entries_len = 0;
+        self.bounds_count = 0;
     }
 
-    pub fn val(&self) -> &[u8] {
-        &self.data[self.key_len..]
+    /// Inserts a new entry into the buffer, if there is not
+    /// enough space for it to be stored, we double the buffer size.
+    pub fn insert(&mut self, key: &[u8], data: &[u8]) {
+        assert!(key.len() <= u32::max_value() as usize);
+        assert!(data.len() <= u32::max_value() as usize);
+
+        if self.fits(key, data) {
+            let bound = EntryBound {
+                key_start: self.entries_len,
+                key_length: key.len() as u32,
+                data_length: data.len() as u32,
+            };
+
+            // We store the key and data bytes one after the other at the front of the buffer.
+            self.buffer[self.entries_len..][..key.len()].copy_from_slice(key);
+            self.buffer[self.entries_len + key.len()..][..data.len()].copy_from_slice(data);
+            self.entries_len += key.len() + data.len();
+
+            // We store the bounds at the end of the buffer and grow from the end to the start
+            // of it. We interpret the end of the buffer as a slice of EntryBounds + 1 entry
+            // that is not assigned and replace it with the new one we want to insert.
+            let bounds_size = (self.bounds_count + 1) * size_of::<EntryBound>();
+            let bounds_start = self.buffer.len() - bounds_size;
+            let bounds = cast_slice_mut::<_, EntryBound>(&mut self.buffer[bounds_start..]);
+            bounds[0] = bound;
+            self.bounds_count += 1;
+        } else {
+            self.reallocate_buffer();
+            self.insert(key, data);
+        }
     }
+
+    /// Returns `true` if inserting this entry will not trigger a reallocation.
+    pub fn fits(&self, key: &[u8], data: &[u8]) -> bool {
+        self.remaining() >= Self::entry_size(key, data)
+    }
+
+    /// Simply returns the size of the internal buffer.
+    pub fn memory_usage(&self) -> usize {
+        self.buffer.len()
+    }
+
+    /// Sorts the entry bounds by the entries keys, after a sort
+    /// the `iter` method will yield the entries sorted.
+    pub fn sort_unstable_by_key(&mut self) {
+        let (entries, tail) = self.buffer.split_at_mut(self.entries_len);
+        let bounds_start = tail.len() - (self.bounds_count * size_of::<EntryBound>());
+        let bounds = cast_slice_mut::<_, EntryBound>(&mut tail[bounds_start..]);
+        bounds.sort_unstable_by_key(|b| &entries[b.key_start..][..b.key_length as usize]);
+    }
+
+    /// Returns an iterator over the keys and datas.
+    pub fn iter(&self) -> impl Iterator<Item = (&[u8], &[u8])> + '_ {
+        let entries = &self.buffer[..self.entries_len];
+        let bounds_start = self.buffer.len() - (self.bounds_count * size_of::<EntryBound>());
+        let bounds = cast_slice::<_, EntryBound>(&self.buffer[bounds_start..]);
+
+        bounds.iter().map(move |b| {
+            let key = &entries[b.key_start..][..b.key_length as usize];
+            let data = &entries[b.key_start + b.key_length as usize..][..b.data_length as usize];
+            (key, data)
+        })
+    }
+
+    /// The remaining amount of bytes before we need to reallocate a new buffer.
+    fn remaining(&self) -> usize {
+        self.buffer.len() - self.entries_len - self.bounds_count * size_of::<EntryBound>()
+    }
+
+    /// The size that this entry will need to be stored in the buffer.
+    fn entry_size(key: &[u8], data: &[u8]) -> usize {
+        size_of::<EntryBound>() + key.len() + data.len()
+    }
+
+    /// Allocates a new buffer of the given size, it is correctly aligned to store `EntryBound`s.
+    fn new_buffer(size: usize) -> Box<[u8]> {
+        // We create a vec of EntryBounds to make sure that the memory alignment
+        // is valid as we will not only store bytes but also EntryBounds.
+        let size = size / size_of::<EntryBound>() + size_of::<EntryBound>();
+        let buffer = vec![EntryBound::default(); size].into_boxed_slice();
+        // We then convert the vec into a boxed slice of bytes.
+        let ptr = Box::into_raw(buffer) as *mut [u8];
+        unsafe { Box::from_raw(ptr) }
+    }
+
+    /// Doubles the size of the internal buffer, copies the entries and bounds into the new buffer.
+    fn reallocate_buffer(&mut self) {
+        let entries_slice = &self.buffer[..self.entries_len];
+        let bounds_start = self.buffer.len() - (self.bounds_count * size_of::<EntryBound>());
+        let bounds_slice = &self.buffer[bounds_start..];
+
+        let mut new_buffer = Self::new_buffer(self.buffer.len() * 2);
+        new_buffer[..self.entries_len].copy_from_slice(entries_slice);
+        let bounds_start = new_buffer.len() - (self.bounds_count * size_of::<EntryBound>());
+        new_buffer[bounds_start..].copy_from_slice(bounds_slice);
+
+        self.buffer = new_buffer;
+    }
+}
+
+#[derive(Default, Copy, Clone, Pod, Zeroable)]
+#[repr(C)]
+struct EntryBound {
+    key_start: usize,
+    key_length: u32,
+    data_length: u32,
 }
 
 pub struct Sorter<MF> {
     chunks: Vec<File>,
-    entries: Vec<Entry>,
-    /// The number of bytes allocated by the entries.
-    entry_bytes: usize,
-    max_memory: usize,
+    entries: Entries,
+    allow_realloc: bool,
+    dump_threshold: usize,
     max_nb_chunks: usize,
     chunk_compression_type: CompressionType,
     chunk_compression_level: u32,
@@ -143,28 +286,32 @@ impl<MF> Sorter<MF> {
 }
 
 impl<MF, U> Sorter<MF>
-where MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>
+where
+    MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>,
 {
     pub fn insert<K, V>(&mut self, key: K, val: V) -> Result<(), Error<U>>
-    where K: AsRef<[u8]>,
-          V: AsRef<[u8]>,
+    where
+        K: AsRef<[u8]>,
+        V: AsRef<[u8]>,
     {
         let key = key.as_ref();
         let val = val.as_ref();
 
-        let ent = Entry::new(key, val);
-        self.entry_bytes += ent.data.len();
-        self.entries.push(ent);
-
-        let entries_vec_size = self.entries.len() * size_of::<Entry>();
-        if self.entry_bytes + entries_vec_size >= self.max_memory {
+        if self.entries.fits(key, val) || (!self.threshold_exceeded() && self.allow_realloc) {
+            self.entries.insert(key, val);
+        } else {
             self.write_chunk()?;
-            if self.chunks.len() > self.max_nb_chunks {
+            self.entries.insert(key, val);
+            if self.chunks.len() >= self.max_nb_chunks {
                 self.merge_chunks()?;
             }
         }
 
         Ok(())
+    }
+
+    fn threshold_exceeded(&self) -> bool {
+        self.entries.memory_usage() >= self.dump_threshold
     }
 
     fn write_chunk(&mut self) -> Result<(), Error<U>> {
@@ -177,34 +324,36 @@ where MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>
             .compression_level(self.chunk_compression_level)
             .build(file)?;
 
-        self.entries.sort_unstable_by(|a, b| a.key().cmp(&b.key()));
+        self.entries.sort_unstable_by_key();
 
         let mut current = None;
-        for entry in self.entries.drain(..) {
+        for (key, value) in self.entries.iter() {
             match current.as_mut() {
                 None => {
-                    let key = entry.key().to_vec();
-                    let val = Cow::Owned(entry.val().to_vec());
-                    current = Some((key, vec![val]));
-                },
-                Some((key, vals)) => {
-                    if key == &entry.key() {
-                        vals.push(Cow::Owned(entry.val().to_vec()));
+                    let key = key.to_vec();
+                    let value = Cow::Owned(value.to_vec());
+                    current = Some((key, vec![value]));
+                }
+                Some((current_key, vals)) => {
+                    if current_key == key {
+                        vals.push(Cow::Owned(value.to_vec()));
                     } else {
                         let merged_val: Vec<u8> = if vals.len() == 1 {
                             vals.pop().map(Cow::into_owned).unwrap()
                         } else {
-                            (self.merge)(&key, &vals).map_err(Error::Merge)?
+                            (self.merge)(&current_key, &vals).map_err(Error::Merge)?
                         };
-                        writer.insert(&key, &merged_val)?;
-                        key.clear();
+                        writer.insert(&current_key, &merged_val)?;
+                        current_key.clear();
                         vals.clear();
-                        key.extend_from_slice(entry.key());
-                        vals.push(Cow::Owned(entry.val().to_vec()));
+                        current_key.extend_from_slice(key);
+                        vals.push(Cow::Owned(value.to_vec()));
                     }
                 }
             }
         }
+
+        self.entries.clear();
 
         if let Some((key, mut vals)) = current.take() {
             let merged_val = if vals.len() == 1 {
@@ -217,7 +366,6 @@ where MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>
 
         let file = writer.into_inner()?;
         self.chunks.push(file);
-        self.entry_bytes = 0;
 
         debug!("writing a chunk took {:.02?}", before_write.elapsed());
 
@@ -237,18 +385,24 @@ where MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>
 
         // Drain the chunks to mmap them and store them into a vector.
         let file_fuse_builder = self.file_fuse_builder;
-        let sources: Result<Vec<_>, Error<U>> = self.chunks.drain(..).map(|mut file| {
-            file.seek(SeekFrom::Start(0))?;
-            let file = file_fuse_builder.build(file);
-            Reader::new(file).map_err(Error::convert_merge_error)
-        }).collect();
+        let sources: Result<Vec<_>, Error<U>> = self
+            .chunks
+            .drain(..)
+            .map(|mut file| {
+                file.seek(SeekFrom::Start(0))?;
+                let file = file_fuse_builder.build(file);
+                Reader::new(file).map_err(Error::convert_merge_error)
+            })
+            .collect();
 
         // Create a merger to merge all those chunks.
         let mut builder = Merger::builder(&self.merge);
         builder.extend(sources?);
         let merger = builder.build();
 
-        let mut iter = merger.into_merge_iter().map_err(Error::convert_merge_error)?;
+        let mut iter = merger
+            .into_merge_iter()
+            .map_err(Error::convert_merge_error)?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
         }
@@ -256,7 +410,11 @@ where MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>
         let file = writer.into_inner()?;
         self.chunks.push(file);
 
-        debug!("merging {} chunks took {:.02?}", original_nb_chunks, before_merge.elapsed());
+        debug!(
+            "merging {} chunks took {:.02?}",
+            original_nb_chunks,
+            before_merge.elapsed()
+        );
 
         Ok(())
     }
@@ -274,16 +432,23 @@ where MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>
         self.write_chunk()?;
 
         let file_fuse_builder = self.file_fuse_builder;
-        let sources: Result<Vec<_>, Error<U>> = self.chunks.into_iter().map(|mut file| {
-            file.seek(SeekFrom::Start(0))?;
-            let file = file_fuse_builder.build(file);
-            Reader::new(file).map_err(Error::convert_merge_error)
-        }).collect();
+        let sources: Result<Vec<_>, Error<U>> = self
+            .chunks
+            .into_iter()
+            .map(|mut file| {
+                file.seek(SeekFrom::Start(0))?;
+                let file = file_fuse_builder.build(file);
+                Reader::new(file).map_err(Error::convert_merge_error)
+            })
+            .collect();
 
         let mut builder = Merger::builder(self.merge);
         builder.extend(sources?);
 
-        builder.build().into_merge_iter().map_err(Error::convert_merge_error)
+        builder
+            .build()
+            .into_merge_iter()
+            .map_err(Error::convert_merge_error)
     }
 }
 
