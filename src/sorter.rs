@@ -231,11 +231,15 @@ impl Entries {
 
     /// Allocates a new buffer of the given size, it is correctly aligned to store `EntryBound`s.
     fn new_buffer(size: usize) -> Box<[u8]> {
-        // We create a vec of EntryBounds to make sure that the memory alignment
-        // is valid as we will not only store bytes but also EntryBounds.
+        // We create a boxed slice of EntryBounds to make sure that the memory
+        // alignment is valid as we will not only store bytes but also EntryBounds.
         let size = size / size_of::<EntryBound>() + size_of::<EntryBound>();
-        let buffer = vec![EntryBound::default(); size].into_boxed_slice();
-        // We then convert the vec into a boxed slice of bytes.
+        let mut buffer = Vec::new();
+        buffer.reserve_exact(size);
+        buffer.resize_with(size, EntryBound::default);
+        let buffer = buffer.into_boxed_slice();
+
+        // We then convert the boxed slice of EntryBounds into a boxed slice of bytes.
         let ptr = Box::into_raw(buffer) as *mut [u8];
         unsafe { Box::from_raw(ptr) }
     }
