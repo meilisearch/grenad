@@ -178,14 +178,10 @@ where R: io::Read,
         }
 
         if self.pending {
-            self.merged_val = if self.cur_vals.len() == 1 {
-                self.cur_vals.pop().map(Cow::into_owned).unwrap()
-            } else {
-                match (self.merge)(&self.cur_key, &self.cur_vals) {
-                    Ok(val) => val,
-                    Err(e) => return Err(Error::Merge(e)),
-                }
-            };
+            match (self.merge)(&self.cur_key, &self.cur_vals) {
+                Ok(val) => self.merged_val = val,
+                Err(e) => return Err(Error::Merge(e)),
+            }
             self.pending = false;
             Ok(Some((&self.cur_key, &self.merged_val)))
         } else {

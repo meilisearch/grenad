@@ -342,11 +342,7 @@ where
                     if current_key == key {
                         vals.push(Cow::Owned(value.to_vec()));
                     } else {
-                        let merged_val: Vec<u8> = if vals.len() == 1 {
-                            vals.pop().map(Cow::into_owned).unwrap()
-                        } else {
-                            (self.merge)(&current_key, &vals).map_err(Error::Merge)?
-                        };
+                        let merged_val = (self.merge)(&current_key, &vals).map_err(Error::Merge)?;
                         writer.insert(&current_key, &merged_val)?;
                         current_key.clear();
                         vals.clear();
@@ -359,12 +355,8 @@ where
 
         self.entries.clear();
 
-        if let Some((key, mut vals)) = current.take() {
-            let merged_val = if vals.len() == 1 {
-                vals.pop().unwrap().into_owned()
-            } else {
-                (self.merge)(&key, &vals).map_err(Error::Merge)?
-            };
+        if let Some((key, vals)) = current.take() {
+            let merged_val = (self.merge)(&key, &vals).map_err(Error::Merge)?;
             writer.insert(&key, &merged_val)?;
         }
 
@@ -464,7 +456,6 @@ mod tests {
     #[test]
     fn simple() {
         fn merge(_key: &[u8], vals: &[Cow<[u8]>]) -> Result<Vec<u8>, Infallible> {
-            assert_ne!(vals.len(), 1);
             Ok(vals.iter().map(AsRef::as_ref).flatten().cloned().collect())
         }
 
