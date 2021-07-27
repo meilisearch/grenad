@@ -117,10 +117,10 @@ impl<MF> SorterBuilder<MF> {
 
 /// Stores entries memory efficiently in a buffer.
 struct Entries {
-    /// The internal buffer that contains the key and data bytes
-    /// on the front of it and the bounds of the buffer on the back.
+    /// The internal buffer that contains the bounds of the buffer
+    /// on the front and the key and data bytes on the back of it.
     ///
-    /// [----key+data---->--remaining--<--bounds--]
+    /// [----bounds---->--remaining--<--key+data--]
     ///
     buffer: Box<[u8]>,
 
@@ -162,24 +162,24 @@ impl Entries {
         assert!(data.len() <= u32::max_value() as usize);
 
         if self.fits(key, data) {
+            // We store the key and data bytes one after the other at the back of the buffer.
+            self.entries_len += key.len() + data.len();
+            let entries_start = self.buffer.len() - self.entries_len;
+            self.buffer[entries_start..][..key.len()].copy_from_slice(key);
+            self.buffer[entries_start + key.len()..][..data.len()].copy_from_slice(data);
+
             let bound = EntryBound {
                 key_start: self.entries_len,
                 key_length: key.len() as u32,
                 data_length: data.len() as u32,
             };
 
-            // We store the key and data bytes one after the other at the front of the buffer.
-            self.buffer[self.entries_len..][..key.len()].copy_from_slice(key);
-            self.buffer[self.entries_len + key.len()..][..data.len()].copy_from_slice(data);
-            self.entries_len += key.len() + data.len();
-
-            // We store the bounds at the end of the buffer and grow from the end to the start
-            // of it. We interpret the end of the buffer as a slice of EntryBounds + 1 entry
+            // We store the bounds at the front of the buffer and grow from the end to the start
+            // of it. We interpret the front of the buffer as a slice of EntryBounds + 1 entry
             // that is not assigned and replace it with the new one we want to insert.
-            let bounds_size = (self.bounds_count + 1) * size_of::<EntryBound>();
-            let bounds_start = self.buffer.len() - bounds_size;
-            let bounds = cast_slice_mut::<_, EntryBound>(&mut self.buffer[bounds_start..]);
-            bounds[0] = bound;
+            let bounds_end = (self.bounds_count + 1) * size_of::<EntryBound>();
+            let bounds = cast_slice_mut::<_, EntryBound>(&mut self.buffer[..bounds_end]);
+            bounds[self.bounds_count] = bound;
             self.bounds_count += 1;
         } else {
             self.reallocate_buffer();
@@ -189,7 +189,11 @@ impl Entries {
 
     /// Returns `true` if inserting this entry will not trigger a reallocation.
     pub fn fits(&self, key: &[u8], data: &[u8]) -> bool {
-        self.remaining() >= Self::entry_size(key, data)
+        // The number of memory aligned EntryBounds that we can store.
+        let aligned_bounds_count = unsafe { self.buffer.align_to::<EntryBound>().1.len() };
+        let remaining_aligned_bounds = aligned_bounds_count - self.bounds_count;
+
+        self.remaining() >= Self::entry_size(key, data) && remaining_aligned_bounds >= 1
     }
 
     /// Simply returns the size of the internal buffer.
@@ -200,21 +204,22 @@ impl Entries {
     /// Sorts the entry bounds by the entries keys, after a sort
     /// the `iter` method will yield the entries sorted.
     pub fn sort_unstable_by_key(&mut self) {
-        let (entries, tail) = self.buffer.split_at_mut(self.entries_len);
-        let bounds_start = tail.len() - (self.bounds_count * size_of::<EntryBound>());
-        let bounds = cast_slice_mut::<_, EntryBound>(&mut tail[bounds_start..]);
-        bounds.sort_unstable_by_key(|b| &entries[b.key_start..][..b.key_length as usize]);
+        let bounds_end = self.bounds_count * size_of::<EntryBound>();
+        let (bounds, tail) = self.buffer.split_at_mut(bounds_end);
+        let bounds = cast_slice_mut::<_, EntryBound>(bounds);
+        bounds.sort_unstable_by_key(|b| &tail[tail.len() - b.key_start..][..b.key_length as usize]);
     }
 
     /// Returns an iterator over the keys and datas.
     pub fn iter(&self) -> impl Iterator<Item = (&[u8], &[u8])> + '_ {
-        let entries = &self.buffer[..self.entries_len];
-        let bounds_start = self.buffer.len() - (self.bounds_count * size_of::<EntryBound>());
-        let bounds = cast_slice::<_, EntryBound>(&self.buffer[bounds_start..]);
+        let bounds_end = self.bounds_count * size_of::<EntryBound>();
+        let (bounds, tail) = self.buffer.split_at(bounds_end);
+        let bounds = cast_slice::<_, EntryBound>(bounds);
 
         bounds.iter().map(move |b| {
-            let key = &entries[b.key_start..][..b.key_length as usize];
-            let data = &entries[b.key_start + b.key_length as usize..][..b.data_length as usize];
+            let entries_start = tail.len() - b.key_start;
+            let key = &tail[entries_start..][..b.key_length as usize];
+            let data = &tail[entries_start + b.key_length as usize..][..b.data_length as usize];
             (key, data)
         })
     }
@@ -246,14 +251,16 @@ impl Entries {
 
     /// Doubles the size of the internal buffer, copies the entries and bounds into the new buffer.
     fn reallocate_buffer(&mut self) {
-        let entries_slice = &self.buffer[..self.entries_len];
-        let bounds_start = self.buffer.len() - (self.bounds_count * size_of::<EntryBound>());
-        let bounds_slice = &self.buffer[bounds_start..];
+        let bounds_end = self.bounds_count * size_of::<EntryBound>();
+        let bounds_bytes = &self.buffer[..bounds_end];
+
+        let entries_start = self.buffer.len() - self.entries_len;
+        let entries_bytes = &self.buffer[entries_start..];
 
         let mut new_buffer = Self::new_buffer(self.buffer.len() * 2);
-        new_buffer[..self.entries_len].copy_from_slice(entries_slice);
-        let bounds_start = new_buffer.len() - (self.bounds_count * size_of::<EntryBound>());
-        new_buffer[bounds_start..].copy_from_slice(bounds_slice);
+        new_buffer[..bounds_end].copy_from_slice(bounds_bytes);
+        let new_entries_start = new_buffer.len() - self.entries_len;
+        new_buffer[new_entries_start..].copy_from_slice(entries_bytes);
 
         self.buffer = new_buffer;
     }
