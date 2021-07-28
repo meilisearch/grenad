@@ -238,7 +238,7 @@ impl Entries {
     fn new_buffer(size: usize) -> Box<[u8]> {
         // We create a boxed slice of EntryBounds to make sure that the memory
         // alignment is valid as we will not only store bytes but also EntryBounds.
-        let size = size / size_of::<EntryBound>() + size_of::<EntryBound>();
+        let size = (size + size_of::<EntryBound>() - 1) / size_of::<EntryBound>();
         let mut buffer = Vec::new();
         buffer.reserve_exact(size);
         buffer.resize_with(size, EntryBound::default);
