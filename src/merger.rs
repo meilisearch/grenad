@@ -125,8 +125,9 @@ impl<R: io::Read, MF> Merger<R, MF> {
 }
 
 impl<R, MF, U> Merger<R, MF>
-where R: io::Read,
-      MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>,
+where
+    R: io::Read,
+    MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
 {
     pub fn write_into<W: io::Write>(self, writer: &mut Writer<W>) -> Result<(), Error<U>> {
         let mut iter = self.into_merge_iter().map_err(Error::convert_merge_error)?;
@@ -147,8 +148,9 @@ pub struct MergerIter<R, MF> {
 }
 
 impl<R, MF, U> MergerIter<R, MF>
-where R: io::Read,
-      MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>,
+where
+    R: io::Read,
+    MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
 {
     pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error<U>> {
         self.cur_key.clear();
@@ -178,14 +180,10 @@ where R: io::Read,
         }
 
         if self.pending {
-            self.merged_val = if self.cur_vals.len() == 1 {
-                self.cur_vals.pop().map(Cow::into_owned).unwrap()
-            } else {
-                match (self.merge)(&self.cur_key, &self.cur_vals) {
-                    Ok(val) => val,
-                    Err(e) => return Err(Error::Merge(e)),
-                }
-            };
+            match (self.merge)(&self.cur_key, &self.cur_vals) {
+                Ok(val) => self.merged_val = val.into_owned(),
+                Err(e) => return Err(Error::Merge(e)),
+            }
             self.pending = false;
             Ok(Some((&self.cur_key, &self.merged_val)))
         } else {
@@ -202,13 +200,10 @@ mod tests {
         use std::convert::Infallible;
         use std::fs::OpenOptions;
         use std::io::{Seek, SeekFrom};
-        use crate::writer::Writer;
-        use crate::file_fuse::FileFuse;
-        use super::*;
 
-        fn merge(_key: &[u8], vals: &[Cow<[u8]>]) -> Result<Vec<u8>, Infallible> {
+        fn merge<'a>(_key: &[u8], vals: &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, Infallible> {
             assert!(vals.windows(2).all(|win| win[0] == win[1]));
-            Ok(vals[0].to_vec())
+            Ok(vals[0])
         }
 
         let mut options = OpenOptions::new();

@@ -1,5 +1,5 @@
-use std::cmp;
 use crate::varint::varint_encode32;
+use std::cmp;
 
 pub const DEFAULT_BLOCK_SIZE: usize = 8192;
 pub const MIN_BLOCK_SIZE: usize = 1024;
@@ -35,10 +35,15 @@ impl BlockBuilder {
         // and save the current key to become the last key.
         match &mut self.last_key {
             Some(last_key) => {
-                assert!(key > &last_key);
+                assert!(
+                    key > &last_key,
+                    "{:?} must be greater than {:?}",
+                    key,
+                    last_key
+                );
                 last_key.clear();
                 last_key.extend_from_slice(key);
-            },
+            }
             None => self.last_key = Some(key.to_vec()),
         }
 
@@ -47,8 +52,10 @@ impl BlockBuilder {
 
         // add "[key length][value length]" to buffer
         let mut buf = [0; 10];
-        self.buffer.extend_from_slice(varint_encode32(&mut buf, key.len() as u32));
-        self.buffer.extend_from_slice(varint_encode32(&mut buf, val.len() as u32));
+        self.buffer
+            .extend_from_slice(varint_encode32(&mut buf, key.len() as u32));
+        self.buffer
+            .extend_from_slice(varint_encode32(&mut buf, val.len() as u32));
 
         // add key to buffer followed by value
         self.buffer.extend_from_slice(key);
@@ -59,7 +66,9 @@ impl BlockBuilder {
 
     pub fn finish(&mut self) -> BlockBuffer {
         self.last_key = None;
-        BlockBuffer { block_builder: self }
+        BlockBuffer {
+            block_builder: self,
+        }
     }
 }
 
