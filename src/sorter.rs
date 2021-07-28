@@ -340,27 +340,20 @@ where
         let mut current = None;
         for (key, value) in self.entries.iter() {
             match current.as_mut() {
-                None => {
-                    let key = key.to_vec();
-                    let value = Cow::Owned(value.to_vec());
-                    current = Some((key, vec![value]));
-                }
+                None => current = Some((key, vec![Cow::Borrowed(value)])),
                 Some((current_key, vals)) => {
-                    if current_key == key {
-                        vals.push(Cow::Owned(value.to_vec()));
+                    if current_key == &key {
+                        vals.push(Cow::Borrowed(value));
                     } else {
                         let merged_val = (self.merge)(&current_key, &vals).map_err(Error::Merge)?;
                         writer.insert(&current_key, &merged_val)?;
-                        current_key.clear();
                         vals.clear();
-                        current_key.extend_from_slice(key);
-                        vals.push(Cow::Owned(value.to_vec()));
+                        *current_key = key;
+                        vals.push(Cow::Borrowed(value));
                     }
                 }
             }
         }
-
-        self.entries.clear();
 
         if let Some((key, vals)) = current.take() {
             let merged_val = (self.merge)(&key, &vals).map_err(Error::Merge)?;
@@ -369,6 +362,7 @@ where
 
         let file = writer.into_inner()?;
         self.chunks.push(file);
+        self.entries.clear();
 
         debug!("writing a chunk took {:.02?}", before_write.elapsed());
 

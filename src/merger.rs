@@ -203,7 +203,7 @@ mod tests {
 
         fn merge<'a>(_key: &[u8], vals: &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, Infallible> {
             assert!(vals.windows(2).all(|win| win[0] == win[1]));
-            Ok(vals[0].to_vec())
+            Ok(vals[0])
         }
 
         let mut options = OpenOptions::new();
