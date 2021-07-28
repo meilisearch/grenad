@@ -298,7 +298,7 @@ impl<MF> Sorter<MF> {
 
 impl<MF, U> Sorter<MF>
 where
-    MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Vec<u8>, U>,
+    MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
 {
     pub fn insert<K, V>(&mut self, key: K, val: V) -> Result<(), Error<U>>
     where
@@ -462,7 +462,7 @@ mod tests {
 
     #[test]
     fn simple() {
-        fn merge(_key: &[u8], vals: &[Cow<[u8]>]) -> Result<Vec<u8>, Infallible> {
+        fn merge<'a>(_key: &[u8], vals: &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, Infallible> {
             Ok(vals.iter().map(AsRef::as_ref).flatten().cloned().collect())
         }
 
