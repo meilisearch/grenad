@@ -1,9 +1,9 @@
 use std::borrow::Cow;
-use std::cmp::{Reverse, Ordering};
+use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::{BinaryHeap, PeekMut};
-use std::{mem, io};
+use std::{io, mem};
 
-use crate::{Error, Writer, Reader};
+use crate::{Error, Reader, Writer};
 
 pub struct Entry<R> {
     iter: Reader<R>,
@@ -14,14 +14,10 @@ pub struct Entry<R> {
 impl<R: io::Read> Entry<R> {
     // also fills the entry
     fn new(iter: Reader<R>) -> Result<Option<Entry<R>>, Error> {
-        let mut entry = Entry {
-            iter,
-            key: Vec::with_capacity(256),
-            val: Vec::with_capacity(256),
-        };
+        let mut entry = Entry { iter, key: Vec::with_capacity(256), val: Vec::with_capacity(256) };
 
         if !entry.fill()? {
-            return Ok(None)
+            return Ok(None);
         }
 
         Ok(Some(entry))
@@ -36,7 +32,7 @@ impl<R: io::Read> Entry<R> {
                 self.key.extend_from_slice(key);
                 self.val.extend_from_slice(val);
                 Ok(true)
-            },
+            }
             None => Ok(false),
         }
     }
@@ -87,7 +83,7 @@ impl<R, MF> MergerBuilder<R, MF> {
 }
 
 impl<R, MF> Extend<Reader<R>> for MergerBuilder<R, MF> {
-    fn extend<T: IntoIterator<Item=Reader<R>>>(&mut self, iter: T) {
+    fn extend<T: IntoIterator<Item = Reader<R>>>(&mut self, iter: T) {
         self.sources.extend(iter);
     }
 }
@@ -171,7 +167,11 @@ where
             if self.cur_key == entry.0.key {
                 self.cur_vals.push(Cow::Owned(mem::take(&mut entry.0.val)));
                 match entry.0.fill() {
-                    Ok(filled) => if !filled { PeekMut::pop(entry); },
+                    Ok(filled) => {
+                        if !filled {
+                            PeekMut::pop(entry);
+                        }
+                    }
                     Err(e) => return Err(e.convert_merge_error()),
                 }
             } else {

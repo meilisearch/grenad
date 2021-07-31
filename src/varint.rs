@@ -6,7 +6,11 @@ pub fn varint_length_packed(data: &[u8]) -> u32 {
         }
         i += 1;
     }
-    if i == data.len() { 0 } else { i as u32 + 1 }
+    if i == data.len() {
+        0
+    } else {
+        i as u32 + 1
+    }
 }
 
 #[must_use]

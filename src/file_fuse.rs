@@ -12,10 +12,7 @@ pub struct FileFuseBuilder {
 
 impl FileFuseBuilder {
     pub fn new() -> FileFuseBuilder {
-        FileFuseBuilder {
-            shrink_size: DEFAULT_SHRINK_SIZE,
-            enable_fusing: false,
-        }
+        FileFuseBuilder { shrink_size: DEFAULT_SHRINK_SIZE, enable_fusing: false }
     }
 
     pub fn shrink_size(&mut self, shrink_size: u64) -> &mut Self {
@@ -35,11 +32,7 @@ impl FileFuseBuilder {
     }
 
     pub fn build(&self, file: File) -> FileFuse {
-        let shrink_size = if self.enable_fusing {
-            Some(self.shrink_size)
-        } else {
-            None
-        };
+        let shrink_size = if self.enable_fusing { Some(self.shrink_size) } else { None };
 
         FileFuse { file, consumed: 0, shrink_size }
     }
@@ -82,7 +75,9 @@ impl Read for FileFuse {
                 self.file.set_len(0)?;
             } else if self.consumed >= shrink_size {
                 let fd = self.file.as_raw_fd();
-                if let Err(e) = fallocate(fd, FallocateFlags::FALLOC_FL_COLLAPSE_RANGE, 0, shrink_size as i64) {
+                if let Err(e) =
+                    fallocate(fd, FallocateFlags::FALLOC_FL_COLLAPSE_RANGE, 0, shrink_size as i64)
+                {
                     if e.as_errno().map_or(false, |e| e == Errno::EINVAL) {
                         self.file.set_len(0)?;
                     } else {
@@ -112,9 +107,10 @@ impl Read for FileFuse {
 #[cfg(feature = "file-fuse")]
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs::OpenOptions;
-    use std::io::{Write, Seek, SeekFrom};
+    use std::io::{Seek, SeekFrom, Write};
+
+    use super::*;
 
     #[test]
     fn it_works() {
@@ -139,7 +135,9 @@ mod tests {
         let buf = &mut [0; 4096];
         loop {
             let count = fuse.read(buf).unwrap();
-            if count == 0 { break }
+            if count == 0 {
+                break;
+            }
             assert!(buf[..count].iter().all(|x| *x == 5));
         }
 
