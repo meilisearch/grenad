@@ -13,11 +13,7 @@ const MIN_SORTER_MEMORY: usize = 10_485_760; // 10MB
 const DEFAULT_NB_CHUNKS: usize = 25;
 const MIN_NB_CHUNKS: usize = 1;
 
-use crate::file_fuse::DEFAULT_SHRINK_SIZE;
-use crate::{
-    CompressionType, Error, FileFuse, FileFuseBuilder, Merger, MergerIter, Reader, Writer,
-    WriterBuilder,
-};
+use crate::{CompressionType, Error, Merger, MergerIter, Reader, Writer, WriterBuilder};
 
 #[derive(Debug, Clone, Copy)]
 pub struct SorterBuilder<MF> {
@@ -26,8 +22,6 @@ pub struct SorterBuilder<MF> {
     pub max_nb_chunks: usize,
     pub chunk_compression_type: CompressionType,
     pub chunk_compression_level: u32,
-    pub file_fusing_shrink_size: u64,
-    pub enable_fusing: bool,
     pub merge: MF,
 }
 
@@ -39,8 +33,6 @@ impl<MF> SorterBuilder<MF> {
             max_nb_chunks: DEFAULT_NB_CHUNKS,
             chunk_compression_type: CompressionType::None,
             chunk_compression_level: 0,
-            file_fusing_shrink_size: DEFAULT_SHRINK_SIZE,
-            enable_fusing: false,
             merge,
         }
     }
@@ -77,23 +69,7 @@ impl<MF> SorterBuilder<MF> {
         self
     }
 
-    pub fn file_fusing_shrink_size(&mut self, shrink_size: u64) -> &mut Self {
-        self.file_fusing_shrink_size = shrink_size;
-        self.enable_fusing = true;
-        self
-    }
-
-    pub fn enable_fusing(&mut self) -> &mut Self {
-        self.enable_fusing = true;
-        self
-    }
-
     pub fn build(self) -> Sorter<MF> {
-        let mut file_fuse_builder = FileFuseBuilder::new();
-        if self.enable_fusing {
-            file_fuse_builder.shrink_size(self.file_fusing_shrink_size);
-        }
-
         let capacity =
             if self.allow_realloc { INITIAL_SORTER_VEC_SIZE } else { self.dump_threshold };
 
@@ -105,7 +81,6 @@ impl<MF> SorterBuilder<MF> {
             max_nb_chunks: self.max_nb_chunks,
             chunk_compression_type: self.chunk_compression_type,
             chunk_compression_level: self.chunk_compression_level,
-            file_fuse_builder,
             merge: self.merge,
         }
     }
@@ -274,7 +249,6 @@ pub struct Sorter<MF> {
     max_nb_chunks: usize,
     chunk_compression_type: CompressionType,
     chunk_compression_level: u32,
-    file_fuse_builder: FileFuseBuilder,
     merge: MF,
 }
 
@@ -362,13 +336,11 @@ where
             .compression_level(self.chunk_compression_level)
             .build(file)?;
 
-        let file_fuse_builder = self.file_fuse_builder;
         let sources: Result<Vec<_>, Error<U>> = self
             .chunks
             .drain(..)
             .map(|mut file| {
                 file.seek(SeekFrom::Start(0))?;
-                let file = file_fuse_builder.build(file);
                 Reader::new(file).map_err(Error::convert_merge_error)
             })
             .collect();
@@ -397,17 +369,15 @@ where
         Ok(())
     }
 
-    pub fn into_iter(mut self) -> Result<MergerIter<FileFuse, MF>, Error<U>> {
+    pub fn into_iter(mut self) -> Result<MergerIter<File, MF>, Error<U>> {
         // Flush the pending unordered entries.
         self.write_chunk()?;
 
-        let file_fuse_builder = self.file_fuse_builder;
         let sources: Result<Vec<_>, Error<U>> = self
             .chunks
             .into_iter()
             .map(|mut file| {
                 file.seek(SeekFrom::Start(0))?;
-                let file = file_fuse_builder.build(file);
                 Reader::new(file).map_err(Error::convert_merge_error)
             })
             .collect();
