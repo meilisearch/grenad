@@ -194,49 +194,4 @@ mod tests {
 
         assert_eq!(x, 2000);
     }
-
-    #[cfg(feature = "file-fuse")]
-    #[test]
-    fn file_fusing() {
-        use std::fs::OpenOptions;
-        use std::io::{Seek, SeekFrom};
-
-        use crate::file_fuse::FileFuse;
-
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .read(true)
-            .write(true)
-            .open("target/reader-file-fusing")
-            .unwrap();
-
-        let wb = Writer::builder();
-        let mut writer = wb.build(file).unwrap();
-
-        for x in 0..2000u32 {
-            let x = x.to_be_bytes();
-            writer.insert(&x, &x).unwrap();
-        }
-
-        let mut file = writer.into_inner().unwrap();
-        assert_ne!(file.metadata().unwrap().len(), 0);
-
-        file.seek(SeekFrom::Start(0)).unwrap();
-        let file = FileFuse::builder().shrink_size(4096).build(file);
-
-        let mut reader = Reader::new(file).unwrap();
-        let mut x: u32 = 0;
-
-        while let Some((k, v)) = reader.next().unwrap() {
-            assert_eq!(k, x.to_be_bytes());
-            assert_eq!(v, x.to_be_bytes());
-            x += 1;
-        }
-
-        assert_eq!(x, 2000);
-
-        let file = reader.into_inner().into_inner();
-        assert_eq!(file.metadata().unwrap().len(), 0);
-    }
 }
