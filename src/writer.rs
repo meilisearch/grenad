@@ -1,7 +1,7 @@
-use std::io;
 use std::convert::TryInto;
+use std::io;
 
-use byteorder::{WriteBytesExt, BigEndian};
+use byteorder::{BigEndian, WriteBytesExt};
 
 use crate::block_builder::{BlockBuilder, DEFAULT_BLOCK_SIZE};
 use crate::compression::{compress, CompressionType};
@@ -51,7 +51,7 @@ impl WriterBuilder {
             block_builder: BlockBuilder::new(self.block_size),
             compression_type: self.compression_type,
             compression_level: self.compression_level,
-            writer
+            writer,
         })
     }
 
@@ -111,7 +111,7 @@ impl<W: io::Write> Writer<W> {
             let buffer = buffer.as_ref();
 
             // Compress, write the compressed block length then the compressed block itself.
-            let buffer = compress(self.compression_type, self.compression_level, buffer.as_ref())?;
+            let buffer = compress(self.compression_type, self.compression_level, buffer)?;
             let block_len = buffer.len().try_into().unwrap();
             self.writer.write_u64::<BigEndian>(block_len)?;
             self.writer.write_all(&buffer)?;

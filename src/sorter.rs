@@ -2,11 +2,9 @@ use std::borrow::Cow;
 use std::fs::File;
 use std::io::{Seek, SeekFrom};
 use std::mem::size_of;
-use std::time::Instant;
 use std::{cmp, io};
 
 use bytemuck::{cast_slice, cast_slice_mut, Pod, Zeroable};
-use log::debug;
 
 const INITIAL_SORTER_VEC_SIZE: usize = 131_072; // 128KB
 const DEFAULT_SORTER_MEMORY: usize = 1_073_741_824; // 1GB
@@ -16,9 +14,10 @@ const DEFAULT_NB_CHUNKS: usize = 25;
 const MIN_NB_CHUNKS: usize = 1;
 
 use crate::file_fuse::DEFAULT_SHRINK_SIZE;
-use crate::{CompressionType, Writer, WriterBuilder};
-use crate::{Error, FileFuse, FileFuseBuilder, Reader};
-use crate::{Merger, MergerIter};
+use crate::{
+    CompressionType, Error, FileFuse, FileFuseBuilder, Merger, MergerIter, Reader, Writer,
+    WriterBuilder,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct SorterBuilder<MF> {
@@ -95,11 +94,8 @@ impl<MF> SorterBuilder<MF> {
             file_fuse_builder.shrink_size(self.file_fusing_shrink_size);
         }
 
-        let capacity = if self.allow_realloc {
-            INITIAL_SORTER_VEC_SIZE
-        } else {
-            self.dump_threshold
-        };
+        let capacity =
+            if self.allow_realloc { INITIAL_SORTER_VEC_SIZE } else { self.dump_threshold };
 
         Sorter {
             chunks: Vec::new(),
@@ -142,11 +138,7 @@ impl Entries {
     /// If you want to be sure about the amount of memory used you can use
     /// the `fits` method.
     pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            buffer: Self::new_buffer(capacity),
-            entries_len: 0,
-            bounds_count: 0,
-        }
+        Self { buffer: Self::new_buffer(capacity), entries_len: 0, bounds_count: 0 }
     }
 
     /// Clear the entries.
@@ -308,6 +300,7 @@ where
         let key = key.as_ref();
         let val = val.as_ref();
 
+        #[allow(clippy::branches_sharing_code)]
         if self.entries.fits(key, val) || (!self.threshold_exceeded() && self.allow_realloc) {
             self.entries.insert(key, val);
         } else {
@@ -326,9 +319,6 @@ where
     }
 
     fn write_chunk(&mut self) -> Result<(), Error<U>> {
-        debug!("writing a chunk...");
-        let before_write = Instant::now();
-
         let file = tempfile::tempfile()?;
         let mut writer = WriterBuilder::new()
             .compression_type(self.chunk_compression_type)
@@ -342,21 +332,19 @@ where
             match current.as_mut() {
                 None => current = Some((key, vec![Cow::Borrowed(value)])),
                 Some((current_key, vals)) => {
-                    if current_key == &key {
-                        vals.push(Cow::Borrowed(value));
-                    } else {
-                        let merged_val = (self.merge)(&current_key, &vals).map_err(Error::Merge)?;
+                    if current_key != &key {
+                        let merged_val = (self.merge)(current_key, vals).map_err(Error::Merge)?;
                         writer.insert(&current_key, &merged_val)?;
                         vals.clear();
                         *current_key = key;
-                        vals.push(Cow::Borrowed(value));
                     }
+                    vals.push(Cow::Borrowed(value));
                 }
             }
         }
 
         if let Some((key, vals)) = current.take() {
-            let merged_val = (self.merge)(&key, &vals).map_err(Error::Merge)?;
+            let merged_val = (self.merge)(key, &vals).map_err(Error::Merge)?;
             writer.insert(&key, &merged_val)?;
         }
 
@@ -364,23 +352,16 @@ where
         self.chunks.push(file);
         self.entries.clear();
 
-        debug!("writing a chunk took {:.02?}", before_write.elapsed());
-
         Ok(())
     }
 
     fn merge_chunks(&mut self) -> Result<(), Error<U>> {
-        debug!("merging {} chunks...", self.chunks.len());
-        let before_merge = Instant::now();
-        let original_nb_chunks = self.chunks.len();
-
         let file = tempfile::tempfile()?;
         let mut writer = WriterBuilder::new()
             .compression_type(self.chunk_compression_type)
             .compression_level(self.chunk_compression_level)
             .build(file)?;
 
-        // Drain the chunks to mmap them and store them into a vector.
         let file_fuse_builder = self.file_fuse_builder;
         let sources: Result<Vec<_>, Error<U>> = self
             .chunks
@@ -397,21 +378,13 @@ where
         builder.extend(sources?);
         let merger = builder.build();
 
-        let mut iter = merger
-            .into_merge_iter()
-            .map_err(Error::convert_merge_error)?;
+        let mut iter = merger.into_merge_iter().map_err(Error::convert_merge_error)?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
         }
 
         let file = writer.into_inner()?;
         self.chunks.push(file);
-
-        debug!(
-            "merging {} chunks took {:.02?}",
-            original_nb_chunks,
-            before_merge.elapsed()
-        );
 
         Ok(())
     }
@@ -442,17 +415,15 @@ where
         let mut builder = Merger::builder(self.merge);
         builder.extend(sources?);
 
-        builder
-            .build()
-            .into_merge_iter()
-            .map_err(Error::convert_merge_error)
+        builder.build().into_merge_iter().map_err(Error::convert_merge_error)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::convert::Infallible;
+
+    use super::*;
 
     #[test]
     fn simple() {
@@ -460,9 +431,8 @@ mod tests {
             Ok(vals.iter().map(AsRef::as_ref).flatten().cloned().collect())
         }
 
-        let mut sorter = SorterBuilder::new(merge)
-            .chunk_compression_type(CompressionType::Snappy)
-            .build();
+        let mut sorter =
+            SorterBuilder::new(merge).chunk_compression_type(CompressionType::Snappy).build();
 
         sorter.insert(b"hello", "kiki").unwrap();
         sorter.insert(b"abstract", "lol").unwrap();

@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::io::{self, ErrorKind};
 use std::mem;
 
-use byteorder::{ReadBytesExt, BigEndian};
+use byteorder::{BigEndian, ReadBytesExt};
 
 use crate::compression::{decompress, CompressionType};
 use crate::varint::varint_decode32;
@@ -44,15 +44,15 @@ impl<R: io::Read> Reader<R> {
                         let key: &'static _ = unsafe { mem::transmute(key) };
                         let val: &'static _ = unsafe { mem::transmute(val) };
                         Ok(Some((key, val)))
-                    },
+                    }
                     None => {
                         if !block.read_from(&mut self.reader)? {
                             return Ok(None);
                         }
                         block.next()
-                    },
+                    }
                 }
-            },
+            }
             None => Ok(None),
         }
     }
@@ -70,12 +70,12 @@ struct BlockReader {
 }
 
 impl BlockReader {
-    fn new<R: io::Read>(reader: &mut R, _type: CompressionType) -> Result<Option<BlockReader>, Error> {
-        let mut block_reader = BlockReader {
-            compression_type: _type,
-            buffer: Vec::new(),
-            offset: 0,
-        };
+    fn new<R: io::Read>(
+        reader: &mut R,
+        _type: CompressionType,
+    ) -> Result<Option<BlockReader>, Error> {
+        let mut block_reader =
+            BlockReader { compression_type: _type, buffer: Vec::new(), offset: 0 };
 
         if block_reader.read_from(reader)? {
             Ok(Some(block_reader))
@@ -98,10 +98,9 @@ impl BlockReader {
         self.buffer.resize(block_len as usize, 0);
         reader.read_exact(&mut self.buffer)?;
 
-        match decompress(self.compression_type, &self.buffer)? {
-            Cow::Owned(vec) => self.buffer = vec,
-            Cow::Borrowed(_) => (),
-        };
+        if let Cow::Owned(vec) = decompress(self.compression_type, &self.buffer)? {
+            self.buffer = vec;
+        }
 
         Ok(true)
     }
@@ -199,9 +198,10 @@ mod tests {
     #[cfg(feature = "file-fuse")]
     #[test]
     fn file_fusing() {
-        use crate::file_fuse::FileFuse;
         use std::fs::OpenOptions;
         use std::io::{Seek, SeekFrom};
+
+        use crate::file_fuse::FileFuse;
 
         let file = OpenOptions::new()
             .create(true)

@@ -1,8 +1,8 @@
 use std::convert::Infallible;
-use std::{fmt, io, error};
+use std::{error, fmt, io};
 
 #[derive(Debug)]
-pub enum Error<U=Infallible> {
+pub enum Error<U = Infallible> {
     Io(io::Error),
     Merge(U),
     InvalidCompressionType,
@@ -28,7 +28,7 @@ impl<U: fmt::Display> fmt::Display for Error<U> {
     }
 }
 
-impl<U: fmt::Display + fmt::Debug> error::Error for Error<U> { }
+impl<U: fmt::Display + fmt::Debug> error::Error for Error<U> {}
 
 impl<U> From<io::Error> for Error<U> {
     fn from(err: io::Error) -> Error<U> {
