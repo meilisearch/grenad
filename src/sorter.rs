@@ -2,11 +2,9 @@ use std::borrow::Cow;
 use std::fs::File;
 use std::io::{Seek, SeekFrom};
 use std::mem::size_of;
-use std::time::Instant;
 use std::{cmp, io};
 
 use bytemuck::{cast_slice, cast_slice_mut, Pod, Zeroable};
-use log::debug;
 
 const INITIAL_SORTER_VEC_SIZE: usize = 131_072; // 128KB
 const DEFAULT_SORTER_MEMORY: usize = 1_073_741_824; // 1GB
@@ -321,9 +319,6 @@ where
     }
 
     fn write_chunk(&mut self) -> Result<(), Error<U>> {
-        debug!("writing a chunk...");
-        let before_write = Instant::now();
-
         let file = tempfile::tempfile()?;
         let mut writer = WriterBuilder::new()
             .compression_type(self.chunk_compression_type)
@@ -357,23 +352,16 @@ where
         self.chunks.push(file);
         self.entries.clear();
 
-        debug!("writing a chunk took {:.02?}", before_write.elapsed());
-
         Ok(())
     }
 
     fn merge_chunks(&mut self) -> Result<(), Error<U>> {
-        debug!("merging {} chunks...", self.chunks.len());
-        let before_merge = Instant::now();
-        let original_nb_chunks = self.chunks.len();
-
         let file = tempfile::tempfile()?;
         let mut writer = WriterBuilder::new()
             .compression_type(self.chunk_compression_type)
             .compression_level(self.chunk_compression_level)
             .build(file)?;
 
-        // Drain the chunks to mmap them and store them into a vector.
         let file_fuse_builder = self.file_fuse_builder;
         let sources: Result<Vec<_>, Error<U>> = self
             .chunks
@@ -397,8 +385,6 @@ where
 
         let file = writer.into_inner()?;
         self.chunks.push(file);
-
-        debug!("merging {} chunks took {:.02?}", original_nb_chunks, before_merge.elapsed());
 
         Ok(())
     }

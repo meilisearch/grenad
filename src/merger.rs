@@ -191,7 +191,6 @@ where
 mod tests {
     #[test]
     #[cfg(target_os = "linux")]
-    #[cfg_attr(miri, ignore)]
     fn file_fusing() {
         use std::borrow::Cow;
         use std::convert::Infallible;
