@@ -152,12 +152,7 @@ where
         self.cur_key.clear();
         self.cur_vals.clear();
 
-        loop {
-            let mut entry = match self.heap.peek_mut() {
-                Some(e) => e,
-                None => break,
-            };
-
+        while let Some(mut entry) = self.heap.peek_mut() {
             if self.cur_key.is_empty() {
                 self.cur_key.extend_from_slice(&entry.0.key);
                 self.cur_vals.clear();
@@ -196,14 +191,19 @@ where
 mod tests {
     #[test]
     #[cfg(target_os = "linux")]
+    #[cfg_attr(miri, ignore)]
     fn file_fusing() {
+        use std::borrow::Cow;
         use std::convert::Infallible;
         use std::fs::OpenOptions;
         use std::io::{Seek, SeekFrom};
 
+        use super::*;
+        use crate::FileFuse;
+
         fn merge<'a>(_key: &[u8], vals: &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, Infallible> {
             assert!(vals.windows(2).all(|win| win[0] == win[1]));
-            Ok(vals[0])
+            Ok(vals[0].clone())
         }
 
         let mut options = OpenOptions::new();

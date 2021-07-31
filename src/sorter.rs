@@ -302,6 +302,7 @@ where
         let key = key.as_ref();
         let val = val.as_ref();
 
+        #[allow(clippy::branches_sharing_code)]
         if self.entries.fits(key, val) || (!self.threshold_exceeded() && self.allow_realloc) {
             self.entries.insert(key, val);
         } else {
@@ -336,21 +337,19 @@ where
             match current.as_mut() {
                 None => current = Some((key, vec![Cow::Borrowed(value)])),
                 Some((current_key, vals)) => {
-                    if current_key == &key {
-                        vals.push(Cow::Borrowed(value));
-                    } else {
-                        let merged_val = (self.merge)(&current_key, &vals).map_err(Error::Merge)?;
+                    if current_key != &key {
+                        let merged_val = (self.merge)(current_key, vals).map_err(Error::Merge)?;
                         writer.insert(&current_key, &merged_val)?;
                         vals.clear();
                         *current_key = key;
-                        vals.push(Cow::Borrowed(value));
                     }
+                    vals.push(Cow::Borrowed(value));
                 }
             }
         }
 
         if let Some((key, vals)) = current.take() {
-            let merged_val = (self.merge)(&key, &vals).map_err(Error::Merge)?;
+            let merged_val = (self.merge)(key, &vals).map_err(Error::Merge)?;
             writer.insert(&key, &merged_val)?;
         }
 

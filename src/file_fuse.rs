@@ -4,7 +4,7 @@ use std::io::{self, Read};
 pub const BLOCK_SIZE: u64 = 4096;
 pub const DEFAULT_SHRINK_SIZE: u64 = BLOCK_SIZE * 1024; // 4 KB
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct FileFuseBuilder {
     shrink_size: u64,
     enable_fusing: bool,

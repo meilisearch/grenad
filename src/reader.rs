@@ -98,10 +98,9 @@ impl BlockReader {
         self.buffer.resize(block_len as usize, 0);
         reader.read_exact(&mut self.buffer)?;
 
-        match decompress(self.compression_type, &self.buffer)? {
-            Cow::Owned(vec) => self.buffer = vec,
-            Cow::Borrowed(_) => (),
-        };
+        if let Cow::Owned(vec) = decompress(self.compression_type, &self.buffer)? {
+            self.buffer = vec;
+        }
 
         Ok(true)
     }
