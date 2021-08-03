@@ -486,15 +486,16 @@ impl ChunkCreation for CursorVec {
 #[cfg(test)]
 mod tests {
     use std::convert::Infallible;
+    use std::iter::repeat;
 
     use super::*;
 
+    fn merge<'a>(_key: &[u8], vals: &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, Infallible> {
+        Ok(vals.iter().map(AsRef::as_ref).flatten().cloned().collect())
+    }
+
     #[test]
     fn simple_cursorvec() {
-        fn merge<'a>(_key: &[u8], vals: &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, Infallible> {
-            Ok(vals.iter().map(AsRef::as_ref).flatten().cloned().collect())
-        }
-
         let mut sorter = SorterBuilder::new(merge)
             .chunk_compression_type(CompressionType::Snappy)
             .chunk_creation(CursorVec)
@@ -518,5 +519,32 @@ mod tests {
                 _ => panic!(),
             }
         }
+    }
+
+    #[test]
+    fn hard_cursorvec() {
+        let mut sorter = SorterBuilder::new(merge)
+            .dump_threshold(1024) // 1KiB
+            .allow_realloc(false)
+            .chunk_compression_type(CompressionType::Snappy)
+            .chunk_creation(CursorVec)
+            .build();
+
+        // make sure that we reach the threshold we store the keys,
+        // values and EntryBound inline in the buffer so we are likely
+        // to reach it by inserting 200x 5+4 bytes long entries.
+        for _ in 0..200 {
+            sorter.insert(b"hello", "kiki").unwrap();
+        }
+
+        let mut bytes = WriterBuilder::new().memory();
+        sorter.write_into(&mut bytes).unwrap();
+        let bytes = bytes.into_inner().unwrap();
+
+        let mut reader = Reader::new(bytes.as_slice()).unwrap();
+        let (key, val) = reader.next().unwrap().unwrap();
+        assert_eq!(key, b"hello");
+        assert!(val.iter().eq(repeat(b"kiki").take(200).flatten()));
+        assert!(reader.next().unwrap().is_none());
     }
 }
