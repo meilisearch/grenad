@@ -35,3 +35,9 @@ impl<U> From<io::Error> for Error<U> {
         Error::Io(err)
     }
 }
+
+impl<U> From<Infallible> for Error<U> {
+    fn from(_err: Infallible) -> Error<U> {
+        unreachable!()
+    }
+}
