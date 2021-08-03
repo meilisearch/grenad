@@ -1,9 +1,10 @@
+use std::alloc::{alloc, dealloc, Layout};
 use std::borrow::Cow;
 use std::convert::Infallible;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::mem::size_of;
-use std::{cmp, io};
+use std::mem::{align_of, size_of};
+use std::{cmp, io, ops, slice};
 
 use bytemuck::{cast_slice, cast_slice_mut, Pod, Zeroable};
 
@@ -113,7 +114,7 @@ struct Entries {
     ///
     /// [----bounds---->--remaining--<--key+data--]
     ///
-    buffer: Box<[u8]>,
+    buffer: EntryBoundAlignedBuffer,
 
     /// The amount of bytes stored in the buffer.
     entries_len: usize,
@@ -133,7 +134,7 @@ impl Entries {
     /// If you want to be sure about the amount of memory used you can use
     /// the `fits` method.
     pub fn with_capacity(capacity: usize) -> Self {
-        Self { buffer: Self::new_buffer(capacity), entries_len: 0, bounds_count: 0 }
+        Self { buffer: EntryBoundAlignedBuffer::new(capacity), entries_len: 0, bounds_count: 0 }
     }
 
     /// Clear the entries.
@@ -221,21 +222,6 @@ impl Entries {
         size_of::<EntryBound>() + key.len() + data.len()
     }
 
-    /// Allocates a new buffer of the given size, it is correctly aligned to store `EntryBound`s.
-    fn new_buffer(size: usize) -> Box<[u8]> {
-        // We create a boxed slice of EntryBounds to make sure that the memory
-        // alignment is valid as we will not only store bytes but also EntryBounds.
-        let size = (size + size_of::<EntryBound>() - 1) / size_of::<EntryBound>();
-        let mut buffer = Vec::new();
-        buffer.reserve_exact(size);
-        buffer.resize_with(size, EntryBound::default);
-        let buffer = buffer.into_boxed_slice();
-
-        // We then convert the boxed slice of EntryBounds into a boxed slice of bytes.
-        let ptr = Box::into_raw(buffer) as *mut [u8];
-        unsafe { Box::from_raw(ptr) }
-    }
-
     /// Doubles the size of the internal buffer, copies the entries and bounds into the new buffer.
     fn reallocate_buffer(&mut self) {
         let bounds_end = self.bounds_count * size_of::<EntryBound>();
@@ -244,7 +230,7 @@ impl Entries {
         let entries_start = self.buffer.len() - self.entries_len;
         let entries_bytes = &self.buffer[entries_start..];
 
-        let mut new_buffer = Self::new_buffer(self.buffer.len() * 2);
+        let mut new_buffer = EntryBoundAlignedBuffer::new(self.buffer.len() * 2);
         new_buffer[..bounds_end].copy_from_slice(bounds_bytes);
         let new_entries_start = new_buffer.len() - self.entries_len;
         new_buffer[new_entries_start..].copy_from_slice(entries_bytes);
@@ -259,6 +245,42 @@ struct EntryBound {
     key_start: usize,
     key_length: u32,
     data_length: u32,
+}
+
+/// Representes an `EntryBound` aligned buffer.
+struct EntryBoundAlignedBuffer(&'static mut [u8]);
+
+impl EntryBoundAlignedBuffer {
+    /// Allocates a new buffer of the given size, it is correctly aligned to store `EntryBound`s.
+    fn new(size: usize) -> EntryBoundAlignedBuffer {
+        let entry_bound_size = size_of::<EntryBound>();
+        let size = (size + entry_bound_size - 1) / entry_bound_size * entry_bound_size;
+        let layout = Layout::from_size_align(size, align_of::<EntryBound>()).unwrap();
+        let ptr = unsafe { alloc(layout) };
+        let slice = unsafe { slice::from_raw_parts_mut(ptr, size) };
+        EntryBoundAlignedBuffer(slice)
+    }
+}
+
+impl ops::Deref for EntryBoundAlignedBuffer {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+impl ops::DerefMut for EntryBoundAlignedBuffer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0
+    }
+}
+
+impl Drop for EntryBoundAlignedBuffer {
+    fn drop(&mut self) {
+        let layout = Layout::from_size_align(self.0.len(), align_of::<EntryBound>()).unwrap();
+        unsafe { dealloc(self.0.as_mut_ptr(), layout) }
+    }
 }
 
 pub struct Sorter<MF, CC: ChunkCreation> {
