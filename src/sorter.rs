@@ -17,6 +17,7 @@ const MIN_NB_CHUNKS: usize = 1;
 
 use crate::{CompressionType, Error, Merger, MergerIter, Reader, Writer, WriterBuilder};
 
+/// A struct that is used to configure a [`Sorter`] to better fit your needs.
 #[derive(Debug, Clone, Copy)]
 pub struct SorterBuilder<MF, CC> {
     dump_threshold: usize,
@@ -29,6 +30,8 @@ pub struct SorterBuilder<MF, CC> {
 }
 
 impl<MF> SorterBuilder<MF, DefaultChunkCreator> {
+    /// Create a [`SorterBuilder`] from a merge function, it can be
+    /// used to configure your [`Sorter`] to better fit your needs.
     pub fn new(merge: MF) -> Self {
         SorterBuilder {
             dump_threshold: DEFAULT_SORTER_MEMORY,
@@ -65,16 +68,20 @@ impl<MF, CC> SorterBuilder<MF, CC> {
         self
     }
 
+    /// Defines the compression type the built [`Sorter`] will use when buffering.
     pub fn chunk_compression_type(&mut self, compression: CompressionType) -> &mut Self {
         self.chunk_compression_type = compression;
         self
     }
 
+    /// Defines the compression level that the defined compression type will use.
     pub fn chunk_compression_level(&mut self, level: u32) -> &mut Self {
         self.chunk_compression_level = level;
         self
     }
 
+    /// The [`ChunkCreator`] strutc used to generate the chunks used
+    /// by the [`Sorter`] to bufferize when required.
     pub fn chunk_creation<CC2>(self, creation: CC2) -> SorterBuilder<MF, CC2> {
         SorterBuilder {
             dump_threshold: self.dump_threshold,
@@ -89,6 +96,7 @@ impl<MF, CC> SorterBuilder<MF, CC> {
 }
 
 impl<MF, CC: ChunkCreator> SorterBuilder<MF, CC> {
+    /// Creates the [`Sorter`] configured by this builder.
     pub fn build(self) -> Sorter<MF, CC> {
         let capacity =
             if self.allow_realloc { INITIAL_SORTER_VEC_SIZE } else { self.dump_threshold };
