@@ -283,6 +283,11 @@ impl Drop for EntryBoundAlignedBuffer {
     }
 }
 
+/// A struct you can use to automatically sort and merge duplicate entries.
+///
+/// You can insert key-value pairs in arbitrary order, it will use the
+/// [`ChunkCreator`] and you the generated chunks to buffer when the `dump_threashold`
+/// setting is reached.
 pub struct Sorter<MF, CC: ChunkCreator> {
     chunks: Vec<CC::Chunk>,
     entries: Entries,
@@ -296,10 +301,13 @@ pub struct Sorter<MF, CC: ChunkCreator> {
 }
 
 impl<MF> Sorter<MF, DefaultChunkCreator> {
+    /// Create a [`SorterBuilder`] from a merge function, it can be
+    /// used to configure your [`Sorter`] to better fit your needs.
     pub fn builder(merge: MF) -> SorterBuilder<MF, DefaultChunkCreator> {
         SorterBuilder::new(merge)
     }
 
+    /// Create a [`Sorter`] from a merge function, with the default parameters.
     pub fn new(merge: MF) -> Sorter<MF, DefaultChunkCreator> {
         SorterBuilder::new(merge).build()
     }
@@ -310,6 +318,8 @@ where
     MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
     CC: ChunkCreator,
 {
+    /// Insert an entry into the [`Sorter`] making sure that conflicts
+    /// are resolved by the provided merge function.
     pub fn insert<K, V>(&mut self, key: K, val: V) -> Result<(), Error<U>>
     where
         K: AsRef<[u8]>,
@@ -407,6 +417,7 @@ where
         Ok(())
     }
 
+    /// Consumes this [`Sorter`] and streams the entries to the [`Writer`] given in parameter.
     pub fn write_into<W: io::Write>(self, writer: &mut Writer<W>) -> Result<(), Error<U>> {
         let mut iter = self.into_iter()?;
         while let Some((key, val)) = iter.next()? {
@@ -415,6 +426,7 @@ where
         Ok(())
     }
 
+    /// Consumes this [`Sorter`] and outputs a stream of the merged entries in key-order.
     pub fn into_iter(mut self) -> Result<MergerIter<CC::Chunk, MF>, Error<U>> {
         // Flush the pending unordered entries.
         self.write_chunk()?;
