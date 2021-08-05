@@ -1,8 +1,10 @@
+use std::alloc::{alloc, dealloc, Layout};
 use std::borrow::Cow;
+use std::convert::Infallible;
 use std::fs::File;
-use std::io::{Seek, SeekFrom};
-use std::mem::size_of;
-use std::{cmp, io};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::mem::{align_of, size_of};
+use std::{cmp, io, ops, slice};
 
 use bytemuck::{cast_slice, cast_slice_mut, Pod, Zeroable};
 
@@ -16,16 +18,17 @@ const MIN_NB_CHUNKS: usize = 1;
 use crate::{CompressionType, Error, Merger, MergerIter, Reader, Writer, WriterBuilder};
 
 #[derive(Debug, Clone, Copy)]
-pub struct SorterBuilder<MF> {
-    pub dump_threshold: usize,
-    pub allow_realloc: bool,
-    pub max_nb_chunks: usize,
-    pub chunk_compression_type: CompressionType,
-    pub chunk_compression_level: u32,
-    pub merge: MF,
+pub struct SorterBuilder<MF, CC> {
+    dump_threshold: usize,
+    allow_realloc: bool,
+    max_nb_chunks: usize,
+    chunk_compression_type: CompressionType,
+    chunk_compression_level: u32,
+    chunk_creation: CC,
+    merge: MF,
 }
 
-impl<MF> SorterBuilder<MF> {
+impl<MF> SorterBuilder<MF, DefaultChunkCreation> {
     pub fn new(merge: MF) -> Self {
         SorterBuilder {
             dump_threshold: DEFAULT_SORTER_MEMORY,
@@ -33,10 +36,13 @@ impl<MF> SorterBuilder<MF> {
             max_nb_chunks: DEFAULT_NB_CHUNKS,
             chunk_compression_type: CompressionType::None,
             chunk_compression_level: 0,
+            chunk_creation: DefaultChunkCreation::default(),
             merge,
         }
     }
+}
 
+impl<MF, CC> SorterBuilder<MF, CC> {
     /// The amount of memory to reach that will trigger a memory dump from in memory to disk.
     pub fn dump_threshold(&mut self, memory: usize) -> &mut Self {
         self.dump_threshold = cmp::max(memory, MIN_SORTER_MEMORY);
@@ -69,7 +75,21 @@ impl<MF> SorterBuilder<MF> {
         self
     }
 
-    pub fn build(self) -> Sorter<MF> {
+    pub fn chunk_creation<CC2>(self, creation: CC2) -> SorterBuilder<MF, CC2> {
+        SorterBuilder {
+            dump_threshold: self.dump_threshold,
+            allow_realloc: self.allow_realloc,
+            max_nb_chunks: self.max_nb_chunks,
+            chunk_compression_type: self.chunk_compression_type,
+            chunk_compression_level: self.chunk_compression_level,
+            chunk_creation: creation,
+            merge: self.merge,
+        }
+    }
+}
+
+impl<MF, CC: ChunkCreation> SorterBuilder<MF, CC> {
+    pub fn build(self) -> Sorter<MF, CC> {
         let capacity =
             if self.allow_realloc { INITIAL_SORTER_VEC_SIZE } else { self.dump_threshold };
 
@@ -81,6 +101,7 @@ impl<MF> SorterBuilder<MF> {
             max_nb_chunks: self.max_nb_chunks,
             chunk_compression_type: self.chunk_compression_type,
             chunk_compression_level: self.chunk_compression_level,
+            chunk_creation: self.chunk_creation,
             merge: self.merge,
         }
     }
@@ -93,7 +114,7 @@ struct Entries {
     ///
     /// [----bounds---->--remaining--<--key+data--]
     ///
-    buffer: Box<[u8]>,
+    buffer: EntryBoundAlignedBuffer,
 
     /// The amount of bytes stored in the buffer.
     entries_len: usize,
@@ -113,7 +134,7 @@ impl Entries {
     /// If you want to be sure about the amount of memory used you can use
     /// the `fits` method.
     pub fn with_capacity(capacity: usize) -> Self {
-        Self { buffer: Self::new_buffer(capacity), entries_len: 0, bounds_count: 0 }
+        Self { buffer: EntryBoundAlignedBuffer::new(capacity), entries_len: 0, bounds_count: 0 }
     }
 
     /// Clear the entries.
@@ -201,21 +222,6 @@ impl Entries {
         size_of::<EntryBound>() + key.len() + data.len()
     }
 
-    /// Allocates a new buffer of the given size, it is correctly aligned to store `EntryBound`s.
-    fn new_buffer(size: usize) -> Box<[u8]> {
-        // We create a boxed slice of EntryBounds to make sure that the memory
-        // alignment is valid as we will not only store bytes but also EntryBounds.
-        let size = (size + size_of::<EntryBound>() - 1) / size_of::<EntryBound>();
-        let mut buffer = Vec::new();
-        buffer.reserve_exact(size);
-        buffer.resize_with(size, EntryBound::default);
-        let buffer = buffer.into_boxed_slice();
-
-        // We then convert the boxed slice of EntryBounds into a boxed slice of bytes.
-        let ptr = Box::into_raw(buffer) as *mut [u8];
-        unsafe { Box::from_raw(ptr) }
-    }
-
     /// Doubles the size of the internal buffer, copies the entries and bounds into the new buffer.
     fn reallocate_buffer(&mut self) {
         let bounds_end = self.bounds_count * size_of::<EntryBound>();
@@ -224,7 +230,7 @@ impl Entries {
         let entries_start = self.buffer.len() - self.entries_len;
         let entries_bytes = &self.buffer[entries_start..];
 
-        let mut new_buffer = Self::new_buffer(self.buffer.len() * 2);
+        let mut new_buffer = EntryBoundAlignedBuffer::new(self.buffer.len() * 2);
         new_buffer[..bounds_end].copy_from_slice(bounds_bytes);
         let new_entries_start = new_buffer.len() - self.entries_len;
         new_buffer[new_entries_start..].copy_from_slice(entries_bytes);
@@ -241,30 +247,68 @@ struct EntryBound {
     data_length: u32,
 }
 
-pub struct Sorter<MF> {
-    chunks: Vec<File>,
+/// Representes an `EntryBound` aligned buffer.
+struct EntryBoundAlignedBuffer(&'static mut [u8]);
+
+impl EntryBoundAlignedBuffer {
+    /// Allocates a new buffer of the given size, it is correctly aligned to store `EntryBound`s.
+    fn new(size: usize) -> EntryBoundAlignedBuffer {
+        let entry_bound_size = size_of::<EntryBound>();
+        let size = (size + entry_bound_size - 1) / entry_bound_size * entry_bound_size;
+        let layout = Layout::from_size_align(size, align_of::<EntryBound>()).unwrap();
+        let ptr = unsafe { alloc(layout) };
+        let slice = unsafe { slice::from_raw_parts_mut(ptr, size) };
+        EntryBoundAlignedBuffer(slice)
+    }
+}
+
+impl ops::Deref for EntryBoundAlignedBuffer {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+impl ops::DerefMut for EntryBoundAlignedBuffer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0
+    }
+}
+
+impl Drop for EntryBoundAlignedBuffer {
+    fn drop(&mut self) {
+        let layout = Layout::from_size_align(self.0.len(), align_of::<EntryBound>()).unwrap();
+        unsafe { dealloc(self.0.as_mut_ptr(), layout) }
+    }
+}
+
+pub struct Sorter<MF, CC: ChunkCreation> {
+    chunks: Vec<CC::Chunk>,
     entries: Entries,
     allow_realloc: bool,
     dump_threshold: usize,
     max_nb_chunks: usize,
     chunk_compression_type: CompressionType,
     chunk_compression_level: u32,
+    chunk_creation: CC,
     merge: MF,
 }
 
-impl<MF> Sorter<MF> {
-    pub fn builder(merge: MF) -> SorterBuilder<MF> {
+impl<MF, CC: ChunkCreation> Sorter<MF, CC> {
+    pub fn builder(merge: MF) -> SorterBuilder<MF, DefaultChunkCreation> {
         SorterBuilder::new(merge)
     }
 
-    pub fn new(merge: MF) -> Sorter<MF> {
+    pub fn new(merge: MF) -> Sorter<MF, DefaultChunkCreation> {
         SorterBuilder::new(merge).build()
     }
 }
 
-impl<MF, U> Sorter<MF>
+impl<MF, CC, U> Sorter<MF, CC>
 where
     MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
+    CC: ChunkCreation,
 {
     pub fn insert<K, V>(&mut self, key: K, val: V) -> Result<(), Error<U>>
     where
@@ -293,11 +337,12 @@ where
     }
 
     fn write_chunk(&mut self) -> Result<(), Error<U>> {
-        let file = tempfile::tempfile()?;
+        let chunk =
+            self.chunk_creation.create().map_err(Into::into).map_err(Error::convert_merge_error)?;
         let mut writer = WriterBuilder::new()
             .compression_type(self.chunk_compression_type)
             .compression_level(self.chunk_compression_level)
-            .build(file)?;
+            .build(chunk)?;
 
         self.entries.sort_unstable_by_key();
 
@@ -322,26 +367,27 @@ where
             writer.insert(&key, &merged_val)?;
         }
 
-        let file = writer.into_inner()?;
-        self.chunks.push(file);
+        let chunk = writer.into_inner()?;
+        self.chunks.push(chunk);
         self.entries.clear();
 
         Ok(())
     }
 
     fn merge_chunks(&mut self) -> Result<(), Error<U>> {
-        let file = tempfile::tempfile()?;
+        let chunk =
+            self.chunk_creation.create().map_err(Into::into).map_err(Error::convert_merge_error)?;
         let mut writer = WriterBuilder::new()
             .compression_type(self.chunk_compression_type)
             .compression_level(self.chunk_compression_level)
-            .build(file)?;
+            .build(chunk)?;
 
         let sources: Result<Vec<_>, Error<U>> = self
             .chunks
             .drain(..)
-            .map(|mut file| {
-                file.seek(SeekFrom::Start(0))?;
-                Reader::new(file).map_err(Error::convert_merge_error)
+            .map(|mut chunk| {
+                chunk.seek(SeekFrom::Start(0))?;
+                Reader::new(chunk).map_err(Error::convert_merge_error)
             })
             .collect();
 
@@ -355,8 +401,8 @@ where
             writer.insert(key, val)?;
         }
 
-        let file = writer.into_inner()?;
-        self.chunks.push(file);
+        let chunk = writer.into_inner()?;
+        self.chunks.push(chunk);
 
         Ok(())
     }
@@ -369,7 +415,7 @@ where
         Ok(())
     }
 
-    pub fn into_iter(mut self) -> Result<MergerIter<File, MF>, Error<U>> {
+    pub fn into_iter(mut self) -> Result<MergerIter<CC::Chunk, MF>, Error<U>> {
         // Flush the pending unordered entries.
         self.write_chunk()?;
 
@@ -389,20 +435,71 @@ where
     }
 }
 
+pub trait ChunkCreation {
+    type Chunk: Write + Seek + Read;
+    type Error: Into<Error>;
+
+    fn create(&self) -> Result<Self::Chunk, Self::Error>;
+}
+
+#[cfg(feature = "tempfile")]
+pub type DefaultChunkCreation = TempFileChunk;
+
+#[cfg(not(feature = "tempfile"))]
+pub type DefaultChunkCreation = CursorVec;
+
+impl<C: Write + Seek + Read, E: Into<Error>> ChunkCreation for dyn Fn() -> Result<C, E> {
+    type Chunk = C;
+    type Error = E;
+
+    fn create(&self) -> Result<Self::Chunk, Self::Error> {
+        self()
+    }
+}
+
+#[cfg(feature = "tempfile")]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct TempFileChunk;
+
+#[cfg(feature = "tempfile")]
+impl ChunkCreation for TempFileChunk {
+    type Chunk = File;
+    type Error = io::Error;
+
+    fn create(&self) -> Result<Self::Chunk, Self::Error> {
+        tempfile::tempfile()
+    }
+}
+
+#[derive(Debug, Default, Copy, Clone)]
+pub struct CursorVec;
+
+impl ChunkCreation for CursorVec {
+    type Chunk = io::Cursor<Vec<u8>>;
+    type Error = Infallible;
+
+    fn create(&self) -> Result<Self::Chunk, Self::Error> {
+        Ok(io::Cursor::new(Vec::new()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::convert::Infallible;
+    use std::iter::repeat;
 
     use super::*;
 
-    #[test]
-    fn simple() {
-        fn merge<'a>(_key: &[u8], vals: &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, Infallible> {
-            Ok(vals.iter().map(AsRef::as_ref).flatten().cloned().collect())
-        }
+    fn merge<'a>(_key: &[u8], vals: &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, Infallible> {
+        Ok(vals.iter().map(AsRef::as_ref).flatten().cloned().collect())
+    }
 
-        let mut sorter =
-            SorterBuilder::new(merge).chunk_compression_type(CompressionType::Snappy).build();
+    #[test]
+    fn simple_cursorvec() {
+        let mut sorter = SorterBuilder::new(merge)
+            .chunk_compression_type(CompressionType::Snappy)
+            .chunk_creation(CursorVec)
+            .build();
 
         sorter.insert(b"hello", "kiki").unwrap();
         sorter.insert(b"abstract", "lol").unwrap();
@@ -422,5 +519,32 @@ mod tests {
                 _ => panic!(),
             }
         }
+    }
+
+    #[test]
+    fn hard_cursorvec() {
+        let mut sorter = SorterBuilder::new(merge)
+            .dump_threshold(1024) // 1KiB
+            .allow_realloc(false)
+            .chunk_compression_type(CompressionType::Snappy)
+            .chunk_creation(CursorVec)
+            .build();
+
+        // make sure that we reach the threshold we store the keys,
+        // values and EntryBound inline in the buffer so we are likely
+        // to reach it by inserting 200x 5+4 bytes long entries.
+        for _ in 0..200 {
+            sorter.insert(b"hello", "kiki").unwrap();
+        }
+
+        let mut bytes = WriterBuilder::new().memory();
+        sorter.write_into(&mut bytes).unwrap();
+        let bytes = bytes.into_inner().unwrap();
+
+        let mut reader = Reader::new(bytes.as_slice()).unwrap();
+        let (key, val) = reader.next().unwrap().unwrap();
+        assert_eq!(key, b"hello");
+        assert!(val.iter().eq(repeat(b"kiki").take(200).flatten()));
+        assert!(reader.next().unwrap().is_none());
     }
 }
