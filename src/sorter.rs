@@ -2,7 +2,7 @@ use std::alloc::{alloc, dealloc, Layout};
 use std::borrow::Cow;
 use std::convert::Infallible;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::mem::{align_of, size_of};
 use std::{cmp, io, ops, slice};
 
@@ -28,7 +28,7 @@ pub struct SorterBuilder<MF, CC> {
     merge: MF,
 }
 
-impl<MF> SorterBuilder<MF, DefaultChunkCreation> {
+impl<MF> SorterBuilder<MF, DefaultChunkCreator> {
     pub fn new(merge: MF) -> Self {
         SorterBuilder {
             dump_threshold: DEFAULT_SORTER_MEMORY,
@@ -36,7 +36,7 @@ impl<MF> SorterBuilder<MF, DefaultChunkCreation> {
             max_nb_chunks: DEFAULT_NB_CHUNKS,
             chunk_compression_type: CompressionType::None,
             chunk_compression_level: 0,
-            chunk_creation: DefaultChunkCreation::default(),
+            chunk_creation: DefaultChunkCreator::default(),
             merge,
         }
     }
@@ -88,7 +88,7 @@ impl<MF, CC> SorterBuilder<MF, CC> {
     }
 }
 
-impl<MF, CC: ChunkCreation> SorterBuilder<MF, CC> {
+impl<MF, CC: ChunkCreator> SorterBuilder<MF, CC> {
     pub fn build(self) -> Sorter<MF, CC> {
         let capacity =
             if self.allow_realloc { INITIAL_SORTER_VEC_SIZE } else { self.dump_threshold };
@@ -283,7 +283,7 @@ impl Drop for EntryBoundAlignedBuffer {
     }
 }
 
-pub struct Sorter<MF, CC: ChunkCreation> {
+pub struct Sorter<MF, CC: ChunkCreator> {
     chunks: Vec<CC::Chunk>,
     entries: Entries,
     allow_realloc: bool,
@@ -295,12 +295,12 @@ pub struct Sorter<MF, CC: ChunkCreation> {
     merge: MF,
 }
 
-impl<MF, CC: ChunkCreation> Sorter<MF, CC> {
-    pub fn builder(merge: MF) -> SorterBuilder<MF, DefaultChunkCreation> {
+impl<MF> Sorter<MF, DefaultChunkCreator> {
+    pub fn builder(merge: MF) -> SorterBuilder<MF, DefaultChunkCreator> {
         SorterBuilder::new(merge)
     }
 
-    pub fn new(merge: MF) -> Sorter<MF, DefaultChunkCreation> {
+    pub fn new(merge: MF) -> Sorter<MF, DefaultChunkCreator> {
         SorterBuilder::new(merge).build()
     }
 }
@@ -308,7 +308,7 @@ impl<MF, CC: ChunkCreation> Sorter<MF, CC> {
 impl<MF, CC, U> Sorter<MF, CC>
 where
     MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
-    CC: ChunkCreation,
+    CC: ChunkCreator,
 {
     pub fn insert<K, V>(&mut self, key: K, val: V) -> Result<(), Error<U>>
     where
@@ -435,20 +435,26 @@ where
     }
 }
 
-pub trait ChunkCreation {
+/// A trait that represent a `ChunkCreator`.
+pub trait ChunkCreator {
+    /// The generated chunk by this `ChunkCreator`.
     type Chunk: Write + Seek + Read;
+    /// The error that can be thrown by this `ChunkCreator`.
     type Error: Into<Error>;
 
+    /// The method called by the sorter that returns the created chunk.
     fn create(&self) -> Result<Self::Chunk, Self::Error>;
 }
 
+/// The default chunk creator.
 #[cfg(feature = "tempfile")]
-pub type DefaultChunkCreation = TempFileChunk;
+pub type DefaultChunkCreator = TempFileChunk;
 
+/// The default chunk creator.
 #[cfg(not(feature = "tempfile"))]
-pub type DefaultChunkCreation = CursorVec;
+pub type DefaultChunkCreator = CursorVec;
 
-impl<C: Write + Seek + Read, E: Into<Error>> ChunkCreation for dyn Fn() -> Result<C, E> {
+impl<C: Write + Seek + Read, E: Into<Error>> ChunkCreator for dyn Fn() -> Result<C, E> {
     type Chunk = C;
     type Error = E;
 
@@ -457,12 +463,13 @@ impl<C: Write + Seek + Read, E: Into<Error>> ChunkCreation for dyn Fn() -> Resul
     }
 }
 
+/// A [`ChunkCreator`] that generates temporary [`File`]s for chunks.
 #[cfg(feature = "tempfile")]
 #[derive(Debug, Default, Copy, Clone)]
 pub struct TempFileChunk;
 
 #[cfg(feature = "tempfile")]
-impl ChunkCreation for TempFileChunk {
+impl ChunkCreator for TempFileChunk {
     type Chunk = File;
     type Error = io::Error;
 
@@ -471,15 +478,16 @@ impl ChunkCreation for TempFileChunk {
     }
 }
 
+/// A [`ChunkCreator`] that generates [`Vec`] of bytes wrapped by a [`Cursor`] for chunks.
 #[derive(Debug, Default, Copy, Clone)]
 pub struct CursorVec;
 
-impl ChunkCreation for CursorVec {
-    type Chunk = io::Cursor<Vec<u8>>;
+impl ChunkCreator for CursorVec {
+    type Chunk = Cursor<Vec<u8>>;
     type Error = Infallible;
 
     fn create(&self) -> Result<Self::Chunk, Self::Error> {
-        Ok(io::Cursor::new(Vec::new()))
+        Ok(Cursor::new(Vec::new()))
     }
 }
 

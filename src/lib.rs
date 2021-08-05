@@ -17,5 +17,5 @@ pub use self::merger::{Merger, MergerBuilder, MergerIter};
 pub use self::reader::Reader;
 #[cfg(feature = "tempfile")]
 pub use self::sorter::TempFileChunk;
-pub use self::sorter::{ChunkCreation, CursorVec, DefaultChunkCreation, Sorter, SorterBuilder};
+pub use self::sorter::{ChunkCreator, CursorVec, DefaultChunkCreator, Sorter, SorterBuilder};
 pub use self::writer::{Writer, WriterBuilder};
