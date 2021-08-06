@@ -40,7 +40,7 @@
 //! sorter.insert("second-counter", 64_u32.to_ne_bytes())?;
 //!
 //! // We can iterate over the entries in key-order.
-//! let mut iter = sorter.into_iter()?;
+//! let mut iter = sorter.into_merger_iter()?;
 //!
 //! // We can see that the sum of u32s is valid here.
 //! assert_eq!(iter.next()?, Some((&b"first-counter"[..], &119_u32.to_ne_bytes()[..])));

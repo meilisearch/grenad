@@ -30,7 +30,7 @@ pub struct SorterBuilder<MF, CC> {
 }
 
 impl<MF> SorterBuilder<MF, DefaultChunkCreator> {
-    /// Create a [`SorterBuilder`] from a merge function, it can be
+    /// Creates a [`SorterBuilder`] from a merge function, it can be
     /// used to configure your [`Sorter`] to better fit your needs.
     pub fn new(merge: MF) -> Self {
         SorterBuilder {
@@ -309,13 +309,13 @@ pub struct Sorter<MF, CC: ChunkCreator> {
 }
 
 impl<MF> Sorter<MF, DefaultChunkCreator> {
-    /// Create a [`SorterBuilder`] from a merge function, it can be
+    /// Creates a [`SorterBuilder`] from a merge function, it can be
     /// used to configure your [`Sorter`] to better fit your needs.
     pub fn builder(merge: MF) -> SorterBuilder<MF, DefaultChunkCreator> {
         SorterBuilder::new(merge)
     }
 
-    /// Create a [`Sorter`] from a merge function, with the default parameters.
+    /// Creates a [`Sorter`] from a merge function, with the default parameters.
     pub fn new(merge: MF) -> Sorter<MF, DefaultChunkCreator> {
         SorterBuilder::new(merge).build()
     }
@@ -414,7 +414,7 @@ where
         builder.extend(sources?);
         let merger = builder.build();
 
-        let mut iter = merger.into_merge_iter().map_err(Error::convert_merge_error)?;
+        let mut iter = merger.into_merger_iter().map_err(Error::convert_merge_error)?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
         }
@@ -427,7 +427,7 @@ where
 
     /// Consumes this [`Sorter`] and streams the entries to the [`Writer`] given in parameter.
     pub fn write_into<W: io::Write>(self, writer: &mut Writer<W>) -> Result<(), Error<U>> {
-        let mut iter = self.into_iter()?;
+        let mut iter = self.into_merger_iter()?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
         }
@@ -435,7 +435,7 @@ where
     }
 
     /// Consumes this [`Sorter`] and outputs a stream of the merged entries in key-order.
-    pub fn into_iter(mut self) -> Result<MergerIter<CC::Chunk, MF>, Error<U>> {
+    pub fn into_merger_iter(mut self) -> Result<MergerIter<CC::Chunk, MF>, Error<U>> {
         // Flush the pending unordered entries.
         self.write_chunk()?;
 
@@ -451,7 +451,7 @@ where
         let mut builder = Merger::builder(self.merge);
         builder.extend(sources?);
 
-        builder.build().into_merge_iter().map_err(Error::convert_merge_error)
+        builder.build().into_merger_iter().map_err(Error::convert_merge_error)
     }
 }
 
@@ -544,7 +544,7 @@ mod tests {
                 b"hello" => assert_eq!(val, b"kiki"),
                 b"abstract" => assert_eq!(val, b"lollol"),
                 b"allo" => assert_eq!(val, b"lol"),
-                _ => panic!(),
+                bytes => panic!("{:?}", bytes),
             }
         }
     }

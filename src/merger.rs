@@ -5,37 +5,46 @@ use std::{io, mem};
 
 use crate::{Error, Reader, Writer};
 
-pub struct Entry<R> {
-    iter: Reader<R>,
-    key: Vec<u8>,
-    val: Vec<u8>,
+/// A struct that is used to configure a [`Merger`] with the sources to merge.
+pub struct MergerBuilder<R, MF> {
+    sources: Vec<Reader<R>>,
+    merge: MF,
 }
 
-impl<R: io::Read> Entry<R> {
-    // also fills the entry
-    fn new(iter: Reader<R>) -> Result<Option<Entry<R>>, Error> {
-        let mut entry = Entry { iter, key: Vec::with_capacity(256), val: Vec::with_capacity(256) };
-
-        if !entry.fill()? {
-            return Ok(None);
-        }
-
-        Ok(Some(entry))
+impl<R, MF> MergerBuilder<R, MF> {
+    /// Creates a [`MergerBuilder`] from a merge function, it can be
+    /// used to configure your [`Merger`] with the sources to merge.
+    pub fn new(merge: MF) -> Self {
+        MergerBuilder { merge, sources: Vec::new() }
     }
 
-    fn fill(&mut self) -> Result<bool, Error> {
-        self.key.clear();
-        self.val.clear();
-
-        match self.iter.next()? {
-            Some((key, val)) => {
-                self.key.extend_from_slice(key);
-                self.val.extend_from_slice(val);
-                Ok(true)
-            }
-            None => Ok(false),
-        }
+    /// Add a source to merge, this function can be chained.
+    pub fn add(&mut self, source: Reader<R>) -> &mut Self {
+        self.push(source);
+        self
     }
+
+    /// Push a source to merge, this function can be used in a loop.
+    pub fn push(&mut self, source: Reader<R>) {
+        self.sources.push(source);
+    }
+
+    /// Creates a [`Merger`] that will merge the sources.
+    pub fn build(self) -> Merger<R, MF> {
+        Merger { sources: self.sources, merge: self.merge }
+    }
+}
+
+impl<R, MF> Extend<Reader<R>> for MergerBuilder<R, MF> {
+    fn extend<T: IntoIterator<Item = Reader<R>>>(&mut self, iter: T) {
+        self.sources.extend(iter);
+    }
+}
+
+struct Entry<R> {
+    iter: Reader<R>,
+    key: Vec<u8>,
+    value: Vec<u8>,
 }
 
 impl<R: io::Read> Ord for Entry<R> {
@@ -58,54 +67,30 @@ impl<R: io::Read> PartialOrd for Entry<R> {
     }
 }
 
-pub struct MergerBuilder<R, MF> {
-    sources: Vec<Reader<R>>,
-    merge: MF,
-}
-
-impl<R, MF> MergerBuilder<R, MF> {
-    pub fn new(merge: MF) -> Self {
-        MergerBuilder { merge, sources: Vec::new() }
-    }
-
-    pub fn add(&mut self, source: Reader<R>) -> &mut Self {
-        self.push(source);
-        self
-    }
-
-    pub fn push(&mut self, source: Reader<R>) {
-        self.sources.push(source);
-    }
-
-    pub fn build(self) -> Merger<R, MF> {
-        Merger { sources: self.sources, merge: self.merge }
-    }
-}
-
-impl<R, MF> Extend<Reader<R>> for MergerBuilder<R, MF> {
-    fn extend<T: IntoIterator<Item = Reader<R>>>(&mut self, iter: T) {
-        self.sources.extend(iter);
-    }
-}
-
+/// A struct you can use to merge entries from the sources by using the merge
+/// function provided to merge values when entries have the same key.
 pub struct Merger<R, MF> {
     sources: Vec<Reader<R>>,
     merge: MF,
 }
 
 impl<R, MF> Merger<R, MF> {
+    /// Creates a [`MergerBuilder`] from a merge function, it can be
+    /// used to configure your [`Merger`] with the sources to merge.
     pub fn builder(merge: MF) -> MergerBuilder<R, MF> {
         MergerBuilder::new(merge)
     }
 }
 
 impl<R: io::Read, MF> Merger<R, MF> {
-    pub fn into_merge_iter(self) -> Result<MergerIter<R, MF>, Error> {
+    /// Consumes this [`Merger`] and outputs a stream of the merged entries in key-order.
+    pub fn into_merger_iter(self) -> Result<MergerIter<R, MF>, Error> {
         let mut heap = BinaryHeap::new();
-        for source in self.sources {
-            // let iter = source.into_iter()?;
-            if let Some(entry) = Entry::new(source)? {
-                heap.push(Reverse(entry));
+        for mut source in self.sources {
+            if let Some((key, value)) = source.next()? {
+                let key = key.to_vec();
+                let value = value.to_vec();
+                heap.push(Reverse(Entry { iter: source, key, value }));
             }
         }
 
@@ -125,8 +110,9 @@ where
     R: io::Read,
     MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
 {
+    /// Consumes this [`Merger`] and streams the entries to the [`Writer`] given in parameter.
     pub fn write_into<W: io::Write>(self, writer: &mut Writer<W>) -> Result<(), Error<U>> {
-        let mut iter = self.into_merge_iter().map_err(Error::convert_merge_error)?;
+        let mut iter = self.into_merger_iter().map_err(Error::convert_merge_error)?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
         }
@@ -134,6 +120,7 @@ where
     }
 }
 
+/// An iterator that yield the merged entries in key-order.
 pub struct MergerIter<R, MF> {
     merge: MF,
     heap: BinaryHeap<Reverse<Entry<R>>>,
@@ -148,6 +135,7 @@ where
     R: io::Read,
     MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
 {
+    /// Yield the entries in key-order where values have been merged when needed.
     pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error<U>> {
         self.cur_key.clear();
         self.cur_vals.clear();
@@ -160,14 +148,23 @@ where
             }
 
             if self.cur_key == entry.0.key {
-                self.cur_vals.push(Cow::Owned(mem::take(&mut entry.0.val)));
-                match entry.0.fill() {
-                    Ok(filled) => {
-                        if !filled {
-                            PeekMut::pop(entry);
-                        }
+                self.cur_vals.push(Cow::Owned(mem::take(&mut entry.0.value)));
+                // Replace the key/value buffers by empty ones, empty Vecs don't
+                // allocate, this way we reuse the previously allocated memory.
+                let mut key_buffer = mem::take(&mut entry.0.key);
+                let mut value_buffer = mem::take(&mut entry.0.value);
+                match entry.0.iter.next().map_err(Error::convert_merge_error)? {
+                    Some((key, value)) => {
+                        key_buffer.clear();
+                        value_buffer.clear();
+                        key_buffer.extend_from_slice(key);
+                        value_buffer.extend_from_slice(value);
+                        entry.0.key = key_buffer;
+                        entry.0.value = value_buffer;
                     }
-                    Err(e) => return Err(e.convert_merge_error()),
+                    None => {
+                        PeekMut::pop(entry);
+                    }
                 }
             } else {
                 break;
@@ -176,7 +173,7 @@ where
 
         if self.pending {
             match (self.merge)(&self.cur_key, &self.cur_vals) {
-                Ok(val) => self.merged_val = val.into_owned(),
+                Ok(value) => self.merged_val = value.into_owned(),
                 Err(e) => return Err(Error::Merge(e)),
             }
             self.pending = false;
