@@ -13,10 +13,10 @@ pub enum CompressionType {
     Snappy = 1,
     /// Use the [`flate2`] crate to de/compress the blocks.
     Zlib = 2,
+    /// Use the [`lz4_flex`] crate to de/compress the blocks.
     Lz4 = 3,
-    Lz4hc = 4,
     /// Use the [`zstd`] crate to de/compress the blocks.
-    Zstd = 5,
+    Zstd = 4,
 }
 
 impl CompressionType {
@@ -26,8 +26,7 @@ impl CompressionType {
             1 => Some(CompressionType::Snappy),
             2 => Some(CompressionType::Zlib),
             3 => Some(CompressionType::Lz4),
-            4 => Some(CompressionType::Lz4hc),
-            5 => Some(CompressionType::Zstd),
+            4 => Some(CompressionType::Zstd),
             _ => None,
         }
     }
@@ -41,7 +40,6 @@ impl FromStr for CompressionType {
             "snappy" => Ok(CompressionType::Snappy),
             "zlib" => Ok(CompressionType::Zlib),
             "lz4" => Ok(CompressionType::Lz4),
-            "lz4hc" => Ok(CompressionType::Lz4hc),
             "zstd" => Ok(CompressionType::Zstd),
             _ => Err(InvalidCompressionType),
         }
@@ -65,11 +63,8 @@ pub fn decompress(type_: CompressionType, data: &[u8]) -> io::Result<Cow<[u8]>> 
         CompressionType::None => Ok(Cow::Borrowed(data)),
         CompressionType::Zlib => zlib_decompress(data),
         CompressionType::Snappy => snappy_decompress(data),
+        CompressionType::Lz4 => lz4_decompress(data),
         CompressionType::Zstd => zstd_decompress(data),
-        other => {
-            let error = format!("unsupported {:?} decompression", other);
-            Err(io::Error::new(io::ErrorKind::Other, error))
-        }
     }
 }
 
@@ -78,11 +73,8 @@ pub fn compress(type_: CompressionType, level: u32, data: &[u8]) -> io::Result<C
         CompressionType::None => Ok(Cow::Borrowed(data)),
         CompressionType::Zlib => zlib_compress(data, level),
         CompressionType::Snappy => snappy_compress(data, level),
+        CompressionType::Lz4 => lz4_compress(data, level),
         CompressionType::Zstd => zstd_compress(data, level),
-        other => {
-            let error = format!("unsupported {:?} decompression", other);
-            Err(io::Error::new(io::ErrorKind::Other, error))
-        }
     }
 }
 
@@ -164,4 +156,50 @@ fn zstd_compress(data: &[u8], level: u32) -> io::Result<Cow<[u8]>> {
 #[cfg(not(feature = "zstd"))]
 fn zstd_compress(_data: &[u8], _level: u32) -> io::Result<Cow<[u8]>> {
     Err(io::Error::new(io::ErrorKind::Other, "unsupported zstd compression"))
+}
+
+// --------- lz4 ---------
+
+#[cfg(feature = "lz4")]
+fn lz4_decompress(data: &[u8]) -> io::Result<Cow<[u8]>> {
+    let mut buffer = Vec::new();
+    let mut rdr = lz4_flex::frame::FrameDecoder::new(data);
+    io::copy(&mut rdr, &mut buffer)?;
+    Ok(Cow::Owned(buffer))
+}
+
+#[cfg(not(feature = "lz4"))]
+fn lz4_decompress(_data: &[u8]) -> io::Result<Cow<[u8]>> {
+    Err(io::Error::new(io::ErrorKind::Other, "unsupported lz4 decompression"))
+}
+
+#[cfg(feature = "lz4")]
+fn lz4_compress(mut data: &[u8], _level: u32) -> io::Result<Cow<[u8]>> {
+    let mut wtr = lz4_flex::frame::FrameEncoder::new(Vec::new());
+    io::copy(&mut data, &mut wtr)?;
+    wtr.finish().map(Cow::Owned).map_err(Into::into)
+}
+
+#[cfg(not(feature = "lz4"))]
+fn lz4_compress(_data: &[u8], _level: u32) -> io::Result<Cow<[u8]>> {
+    Err(io::Error::new(io::ErrorKind::Other, "unsupported lz4 compression"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(all(feature = "zlib", feature = "snappy", feature = "zstd", feature = "lz4"))]
+    fn check_all_compressions() {
+        use CompressionType::*;
+
+        let data = "hello world this is my string!!!";
+        for ctype in [None, Zlib, Snappy, Zstd, Lz4] {
+            let level = 0;
+            let compressed = compress(ctype, level, data.as_bytes()).unwrap();
+            let output = decompress(ctype, &compressed).unwrap();
+            assert_eq!(output.as_ref(), data.as_bytes());
+        }
+    }
 }
