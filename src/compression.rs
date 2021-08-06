@@ -3,14 +3,19 @@ use std::error::Error;
 use std::str::FromStr;
 use std::{fmt, io};
 
+/// The different supported types of compression.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum CompressionType {
+    /// Do not compress the blocks.
     None = 0,
+    /// Use the [`snap`] crate to de/compress the blocks.
     Snappy = 1,
+    /// Use the [`flate2`] crate to de/compress the blocks.
     Zlib = 2,
     Lz4 = 3,
     Lz4hc = 4,
+    /// Use the [`zstd`] crate to de/compress the blocks.
     Zstd = 5,
 }
 
@@ -43,6 +48,7 @@ impl FromStr for CompressionType {
     }
 }
 
+/// An invalid compression type have been read and the block can't be de/compressed.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InvalidCompressionType;
 
