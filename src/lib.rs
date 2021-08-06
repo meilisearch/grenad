@@ -106,7 +106,7 @@
 //! use std::borrow::Cow;
 //! use std::convert::TryInto;
 //!
-//! use grenad::Sorter;
+//! use grenad::{CursorVec, SorterBuilder};
 //!
 //! // This merge function:
 //! //  - parses u32s from native-endian bytes,
@@ -127,7 +127,7 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! // We create a sorter that will sum our u32s when necessary.
-//! let mut sorter = Sorter::new(wrapping_sum_u32s);
+//! let mut sorter = SorterBuilder::new(wrapping_sum_u32s).chunk_creator(CursorVec).build();
 //!
 //! // We insert multiple entries with the same key but different values
 //! // in arbitrary order, the sorter will take care of merging them for us.

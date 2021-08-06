@@ -25,7 +25,7 @@ pub struct SorterBuilder<MF, CC> {
     max_nb_chunks: usize,
     chunk_compression_type: CompressionType,
     chunk_compression_level: u32,
-    chunk_creation: CC,
+    chunk_creator: CC,
     merge: MF,
 }
 
@@ -39,7 +39,7 @@ impl<MF> SorterBuilder<MF, DefaultChunkCreator> {
             max_nb_chunks: DEFAULT_NB_CHUNKS,
             chunk_compression_type: CompressionType::None,
             chunk_compression_level: 0,
-            chunk_creation: DefaultChunkCreator::default(),
+            chunk_creator: DefaultChunkCreator::default(),
             merge,
         }
     }
@@ -82,14 +82,14 @@ impl<MF, CC> SorterBuilder<MF, CC> {
 
     /// The [`ChunkCreator`] strutc used to generate the chunks used
     /// by the [`Sorter`] to bufferize when required.
-    pub fn chunk_creation<CC2>(self, creation: CC2) -> SorterBuilder<MF, CC2> {
+    pub fn chunk_creator<CC2>(self, creation: CC2) -> SorterBuilder<MF, CC2> {
         SorterBuilder {
             dump_threshold: self.dump_threshold,
             allow_realloc: self.allow_realloc,
             max_nb_chunks: self.max_nb_chunks,
             chunk_compression_type: self.chunk_compression_type,
             chunk_compression_level: self.chunk_compression_level,
-            chunk_creation: creation,
+            chunk_creator: creation,
             merge: self.merge,
         }
     }
@@ -109,7 +109,7 @@ impl<MF, CC: ChunkCreator> SorterBuilder<MF, CC> {
             max_nb_chunks: self.max_nb_chunks,
             chunk_compression_type: self.chunk_compression_type,
             chunk_compression_level: self.chunk_compression_level,
-            chunk_creation: self.chunk_creation,
+            chunk_creator: self.chunk_creator,
             merge: self.merge,
         }
     }
@@ -304,7 +304,7 @@ pub struct Sorter<MF, CC: ChunkCreator> {
     max_nb_chunks: usize,
     chunk_compression_type: CompressionType,
     chunk_compression_level: u32,
-    chunk_creation: CC,
+    chunk_creator: CC,
     merge: MF,
 }
 
@@ -356,7 +356,7 @@ where
 
     fn write_chunk(&mut self) -> Result<(), Error<U>> {
         let chunk =
-            self.chunk_creation.create().map_err(Into::into).map_err(Error::convert_merge_error)?;
+            self.chunk_creator.create().map_err(Into::into).map_err(Error::convert_merge_error)?;
         let mut writer = WriterBuilder::new()
             .compression_type(self.chunk_compression_type)
             .compression_level(self.chunk_compression_level)
@@ -394,7 +394,7 @@ where
 
     fn merge_chunks(&mut self) -> Result<(), Error<U>> {
         let chunk =
-            self.chunk_creation.create().map_err(Into::into).map_err(Error::convert_merge_error)?;
+            self.chunk_creator.create().map_err(Into::into).map_err(Error::convert_merge_error)?;
         let mut writer = WriterBuilder::new()
             .compression_type(self.chunk_compression_type)
             .compression_level(self.chunk_compression_level)
@@ -526,7 +526,7 @@ mod tests {
     fn simple_cursorvec() {
         let mut sorter = SorterBuilder::new(merge)
             .chunk_compression_type(CompressionType::Snappy)
-            .chunk_creation(CursorVec)
+            .chunk_creator(CursorVec)
             .build();
 
         sorter.insert(b"hello", "kiki").unwrap();
@@ -555,7 +555,7 @@ mod tests {
             .dump_threshold(1024) // 1KiB
             .allow_realloc(false)
             .chunk_compression_type(CompressionType::Snappy)
-            .chunk_creation(CursorVec)
+            .chunk_creator(CursorVec)
             .build();
 
         // make sure that we reach the threshold we store the keys,
