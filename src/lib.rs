@@ -14,8 +14,8 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut writer = Writer::memory();
-//! writer.insert("first-counter", 119_u32.to_ne_bytes());
-//! writer.insert("second-counter", 384_u32.to_ne_bytes());
+//! writer.insert("first-counter", 119_u32.to_ne_bytes())?;
+//! writer.insert("second-counter", 384_u32.to_ne_bytes())?;
 //!
 //! // We create a reader from our writer.
 //! let cursor = writer.into_inner().map(Cursor::new)?;
@@ -39,7 +39,7 @@
 //! use std::convert::TryInto;
 //! use std::io::Cursor;
 //!
-//! use grenad::{MergerBuilder, Reader, Sorter, Writer};
+//! use grenad::{MergerBuilder, Reader, Writer};
 //!
 //! // This merge function:
 //! //  - parses u32s from native-endian bytes,
@@ -66,11 +66,11 @@
 //!
 //! // We insert our key-value pairs in order and
 //! // mix them between our writers.
-//! writera.insert("first-counter", 32_u32.to_ne_bytes());
-//! writera.insert("second-counter", 64_u32.to_ne_bytes());
-//! writerb.insert("first-counter", 23_u32.to_ne_bytes());
-//! writerb.insert("second-counter", 320_u32.to_ne_bytes());
-//! writerc.insert("first-counter", 64_u32.to_ne_bytes());
+//! writera.insert("first-counter", 32_u32.to_ne_bytes())?;
+//! writera.insert("second-counter", 64_u32.to_ne_bytes())?;
+//! writerb.insert("first-counter", 23_u32.to_ne_bytes())?;
+//! writerb.insert("second-counter", 320_u32.to_ne_bytes())?;
+//! writerc.insert("first-counter", 64_u32.to_ne_bytes())?;
 //!
 //! // We create readers from our writers.
 //! let cursora = writera.into_inner().map(Cursor::new)?;
@@ -82,7 +82,7 @@
 //!
 //! // We create a merger that will sum our u32s when necessary,
 //! // and we add our readers to the list of readers to merge.
-//! let mut merger_builder = MergerBuilder::new(wrapping_sum_u32s);
+//! let merger_builder = MergerBuilder::new(wrapping_sum_u32s);
 //! let merger = merger_builder.add(readera).add(readerb).add(readerc).build();
 //!
 //! // We can iterate over the entries in key-order.
