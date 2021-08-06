@@ -6,6 +6,7 @@ use byteorder::{BigEndian, WriteBytesExt};
 use crate::block_builder::{BlockBuilder, DEFAULT_BLOCK_SIZE};
 use crate::compression::{compress, CompressionType};
 
+/// A struct that is used to configure a [`Writer`].
 pub struct WriterBuilder {
     compression_type: CompressionType,
     compression_level: u32,
@@ -23,25 +24,35 @@ impl Default for WriterBuilder {
 }
 
 impl WriterBuilder {
+    /// Creates a [`WriterBuilder`], it can be used to
+    /// configure your [`Writer`] to better fit your needs.
     pub fn new() -> WriterBuilder {
         WriterBuilder::default()
     }
 
-    pub fn compression_type(&mut self, _type: CompressionType) -> &mut Self {
-        self.compression_type = _type;
+    /// Defines the [`CompressionType`] that will be used to compress the writer blocks.
+    pub fn compression_type(&mut self, ctype: CompressionType) -> &mut Self {
+        self.compression_type = ctype;
         self
     }
 
+    /// Defines the copression level of the defined [`CompressionType`]
+    /// that will be used to compress the writer blocks.
     pub fn compression_level(&mut self, level: u32) -> &mut Self {
         self.compression_level = level;
         self
     }
 
+    /// Defines the size of the blocks that the writer will writer.
+    ///
+    /// The bigger the blocks are the better they are compressed
+    /// but the more time it takes to compress and decompress them.
     pub fn block_size(&mut self, size: usize) -> &mut Self {
         self.block_size = size;
         self
     }
 
+    /// Creates the [`Writer`] that will write into the provided [`io::Write`] type.
     pub fn build<W: io::Write>(&self, mut writer: W) -> io::Result<Writer<W>> {
         // We first write the compression type.
         // TODO write a magic number too.
@@ -55,11 +66,14 @@ impl WriterBuilder {
         })
     }
 
+    /// Creates the [`Writer`] that will write into a [`Vec`] of bytes.
     pub fn memory(&mut self) -> Writer<Vec<u8>> {
         self.build(Vec::new()).unwrap()
     }
 }
 
+/// A struct you can use to write entries into any [`io::Write`] type,
+/// entries must be inserted in key-order.
 pub struct Writer<W> {
     block_builder: BlockBuilder,
     compression_type: CompressionType,
@@ -68,22 +82,27 @@ pub struct Writer<W> {
 }
 
 impl Writer<Vec<u8>> {
+    /// Creates a [`Writer`] that will write into a [`Vec`] of bytes.
     pub fn memory() -> Writer<Vec<u8>> {
         WriterBuilder::new().memory()
     }
 }
 
 impl Writer<()> {
+    /// Creates a [`WriterBuilder`], it can be used to configure your [`Writer`].
     pub fn builder() -> WriterBuilder {
         WriterBuilder::default()
     }
 }
 
 impl<W: io::Write> Writer<W> {
+    /// Creates a [`Writer`] that will write into the provided [`io::Write`] type.
     pub fn new(writer: W) -> io::Result<Writer<W>> {
         WriterBuilder::new().build(writer)
     }
 
+    /// Writes the provided entry into the underlying [`io::Write`] type,
+    /// key-values must be given in key-order.
     pub fn insert<A, B>(&mut self, key: A, val: B) -> io::Result<()>
     where
         A: AsRef<[u8]>,
@@ -101,10 +120,16 @@ impl<W: io::Write> Writer<W> {
         Ok(())
     }
 
+    /// Consumes this [`Writer`] and fetches the latest block currently being built.
+    ///
+    /// You must call this method before using the underlying [`io::Write`] type.
     pub fn finish(self) -> io::Result<()> {
         self.into_inner().map(drop)
     }
 
+    /// Consumes this [`Writer`] and fetches the latest block currenty being built.
+    ///
+    /// Returns the underlying [`io::Write`] provided type.
     pub fn into_inner(mut self) -> io::Result<W> {
         if !self.block_builder.is_empty() {
             let buffer = self.block_builder.finish();
