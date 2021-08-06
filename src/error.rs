@@ -1,10 +1,14 @@
 use std::convert::Infallible;
 use std::{error, fmt, io};
 
+/// Represents an error that can occur while using this library.
 #[derive(Debug)]
 pub enum Error<U = Infallible> {
+    /// An [`io::Error`] occured either while reading or writing.
     Io(io::Error),
+    /// A merge error occured while trying to merge values.
     Merge(U),
+    /// An invalid [`crate::CompressionType`] has been encountered.
     InvalidCompressionType,
 }
 

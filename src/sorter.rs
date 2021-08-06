@@ -2,7 +2,7 @@ use std::alloc::{alloc, dealloc, Layout};
 use std::borrow::Cow;
 use std::convert::Infallible;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::mem::{align_of, size_of};
 use std::{cmp, io, ops, slice};
 
@@ -17,6 +17,7 @@ const MIN_NB_CHUNKS: usize = 1;
 
 use crate::{CompressionType, Error, Merger, MergerIter, Reader, Writer, WriterBuilder};
 
+/// A struct that is used to configure a [`Sorter`] to better fit your needs.
 #[derive(Debug, Clone, Copy)]
 pub struct SorterBuilder<MF, CC> {
     dump_threshold: usize,
@@ -28,7 +29,9 @@ pub struct SorterBuilder<MF, CC> {
     merge: MF,
 }
 
-impl<MF> SorterBuilder<MF, DefaultChunkCreation> {
+impl<MF> SorterBuilder<MF, DefaultChunkCreator> {
+    /// Creates a [`SorterBuilder`] from a merge function, it can be
+    /// used to configure your [`Sorter`] to better fit your needs.
     pub fn new(merge: MF) -> Self {
         SorterBuilder {
             dump_threshold: DEFAULT_SORTER_MEMORY,
@@ -36,7 +39,7 @@ impl<MF> SorterBuilder<MF, DefaultChunkCreation> {
             max_nb_chunks: DEFAULT_NB_CHUNKS,
             chunk_compression_type: CompressionType::None,
             chunk_compression_level: 0,
-            chunk_creation: DefaultChunkCreation::default(),
+            chunk_creation: DefaultChunkCreator::default(),
             merge,
         }
     }
@@ -65,16 +68,20 @@ impl<MF, CC> SorterBuilder<MF, CC> {
         self
     }
 
+    /// Defines the compression type the built [`Sorter`] will use when buffering.
     pub fn chunk_compression_type(&mut self, compression: CompressionType) -> &mut Self {
         self.chunk_compression_type = compression;
         self
     }
 
+    /// Defines the compression level that the defined compression type will use.
     pub fn chunk_compression_level(&mut self, level: u32) -> &mut Self {
         self.chunk_compression_level = level;
         self
     }
 
+    /// The [`ChunkCreator`] strutc used to generate the chunks used
+    /// by the [`Sorter`] to bufferize when required.
     pub fn chunk_creation<CC2>(self, creation: CC2) -> SorterBuilder<MF, CC2> {
         SorterBuilder {
             dump_threshold: self.dump_threshold,
@@ -88,7 +95,8 @@ impl<MF, CC> SorterBuilder<MF, CC> {
     }
 }
 
-impl<MF, CC: ChunkCreation> SorterBuilder<MF, CC> {
+impl<MF, CC: ChunkCreator> SorterBuilder<MF, CC> {
+    /// Creates the [`Sorter`] configured by this builder.
     pub fn build(self) -> Sorter<MF, CC> {
         let capacity =
             if self.allow_realloc { INITIAL_SORTER_VEC_SIZE } else { self.dump_threshold };
@@ -283,7 +291,12 @@ impl Drop for EntryBoundAlignedBuffer {
     }
 }
 
-pub struct Sorter<MF, CC: ChunkCreation> {
+/// A struct you can use to automatically sort and merge duplicate entries.
+///
+/// You can insert key-value pairs in arbitrary order, it will use the
+/// [`ChunkCreator`] and you the generated chunks to buffer when the `dump_threashold`
+/// setting is reached.
+pub struct Sorter<MF, CC: ChunkCreator> {
     chunks: Vec<CC::Chunk>,
     entries: Entries,
     allow_realloc: bool,
@@ -295,12 +308,15 @@ pub struct Sorter<MF, CC: ChunkCreation> {
     merge: MF,
 }
 
-impl<MF, CC: ChunkCreation> Sorter<MF, CC> {
-    pub fn builder(merge: MF) -> SorterBuilder<MF, DefaultChunkCreation> {
+impl<MF> Sorter<MF, DefaultChunkCreator> {
+    /// Creates a [`SorterBuilder`] from a merge function, it can be
+    /// used to configure your [`Sorter`] to better fit your needs.
+    pub fn builder(merge: MF) -> SorterBuilder<MF, DefaultChunkCreator> {
         SorterBuilder::new(merge)
     }
 
-    pub fn new(merge: MF) -> Sorter<MF, DefaultChunkCreation> {
+    /// Creates a [`Sorter`] from a merge function, with the default parameters.
+    pub fn new(merge: MF) -> Sorter<MF, DefaultChunkCreator> {
         SorterBuilder::new(merge).build()
     }
 }
@@ -308,8 +324,10 @@ impl<MF, CC: ChunkCreation> Sorter<MF, CC> {
 impl<MF, CC, U> Sorter<MF, CC>
 where
     MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
-    CC: ChunkCreation,
+    CC: ChunkCreator,
 {
+    /// Insert an entry into the [`Sorter`] making sure that conflicts
+    /// are resolved by the provided merge function.
     pub fn insert<K, V>(&mut self, key: K, val: V) -> Result<(), Error<U>>
     where
         K: AsRef<[u8]>,
@@ -396,7 +414,7 @@ where
         builder.extend(sources?);
         let merger = builder.build();
 
-        let mut iter = merger.into_merge_iter().map_err(Error::convert_merge_error)?;
+        let mut iter = merger.into_merger_iter().map_err(Error::convert_merge_error)?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
         }
@@ -407,15 +425,17 @@ where
         Ok(())
     }
 
+    /// Consumes this [`Sorter`] and streams the entries to the [`Writer`] given in parameter.
     pub fn write_into<W: io::Write>(self, writer: &mut Writer<W>) -> Result<(), Error<U>> {
-        let mut iter = self.into_iter()?;
+        let mut iter = self.into_merger_iter()?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
         }
         Ok(())
     }
 
-    pub fn into_iter(mut self) -> Result<MergerIter<CC::Chunk, MF>, Error<U>> {
+    /// Consumes this [`Sorter`] and outputs a stream of the merged entries in key-order.
+    pub fn into_merger_iter(mut self) -> Result<MergerIter<CC::Chunk, MF>, Error<U>> {
         // Flush the pending unordered entries.
         self.write_chunk()?;
 
@@ -431,24 +451,30 @@ where
         let mut builder = Merger::builder(self.merge);
         builder.extend(sources?);
 
-        builder.build().into_merge_iter().map_err(Error::convert_merge_error)
+        builder.build().into_merger_iter().map_err(Error::convert_merge_error)
     }
 }
 
-pub trait ChunkCreation {
+/// A trait that represent a `ChunkCreator`.
+pub trait ChunkCreator {
+    /// The generated chunk by this `ChunkCreator`.
     type Chunk: Write + Seek + Read;
+    /// The error that can be thrown by this `ChunkCreator`.
     type Error: Into<Error>;
 
+    /// The method called by the sorter that returns the created chunk.
     fn create(&self) -> Result<Self::Chunk, Self::Error>;
 }
 
+/// The default chunk creator.
 #[cfg(feature = "tempfile")]
-pub type DefaultChunkCreation = TempFileChunk;
+pub type DefaultChunkCreator = TempFileChunk;
 
+/// The default chunk creator.
 #[cfg(not(feature = "tempfile"))]
-pub type DefaultChunkCreation = CursorVec;
+pub type DefaultChunkCreator = CursorVec;
 
-impl<C: Write + Seek + Read, E: Into<Error>> ChunkCreation for dyn Fn() -> Result<C, E> {
+impl<C: Write + Seek + Read, E: Into<Error>> ChunkCreator for dyn Fn() -> Result<C, E> {
     type Chunk = C;
     type Error = E;
 
@@ -457,12 +483,13 @@ impl<C: Write + Seek + Read, E: Into<Error>> ChunkCreation for dyn Fn() -> Resul
     }
 }
 
+/// A [`ChunkCreator`] that generates temporary [`File`]s for chunks.
 #[cfg(feature = "tempfile")]
 #[derive(Debug, Default, Copy, Clone)]
 pub struct TempFileChunk;
 
 #[cfg(feature = "tempfile")]
-impl ChunkCreation for TempFileChunk {
+impl ChunkCreator for TempFileChunk {
     type Chunk = File;
     type Error = io::Error;
 
@@ -471,15 +498,16 @@ impl ChunkCreation for TempFileChunk {
     }
 }
 
+/// A [`ChunkCreator`] that generates [`Vec`] of bytes wrapped by a [`Cursor`] for chunks.
 #[derive(Debug, Default, Copy, Clone)]
 pub struct CursorVec;
 
-impl ChunkCreation for CursorVec {
-    type Chunk = io::Cursor<Vec<u8>>;
+impl ChunkCreator for CursorVec {
+    type Chunk = Cursor<Vec<u8>>;
     type Error = Infallible;
 
     fn create(&self) -> Result<Self::Chunk, Self::Error> {
-        Ok(io::Cursor::new(Vec::new()))
+        Ok(Cursor::new(Vec::new()))
     }
 }
 
@@ -516,7 +544,7 @@ mod tests {
                 b"hello" => assert_eq!(val, b"kiki"),
                 b"abstract" => assert_eq!(val, b"lollol"),
                 b"allo" => assert_eq!(val, b"lol"),
-                _ => panic!(),
+                bytes => panic!("{:?}", bytes),
             }
         }
     }

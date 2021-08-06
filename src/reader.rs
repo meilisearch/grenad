@@ -8,6 +8,7 @@ use crate::compression::{decompress, CompressionType};
 use crate::varint::varint_decode32;
 use crate::Error;
 
+/// A struct that is able to read a grenad file that has been created by a [`crate::Writer`].
 #[derive(Clone)]
 pub struct Reader<R> {
     compression_type: CompressionType,
@@ -16,6 +17,7 @@ pub struct Reader<R> {
 }
 
 impl<R: io::Read> Reader<R> {
+    /// Creates a [`Reader`] that will read from the provided [`io::Read`] type.
     pub fn new(mut reader: R) -> Result<Reader<R>, Error> {
         let compression = match reader.read_u8() {
             Ok(compression) => compression,
@@ -30,10 +32,12 @@ impl<R: io::Read> Reader<R> {
         Ok(Reader { compression_type, reader, current_block })
     }
 
+    /// Returns the [`CompressionType`] used by the underlying [`io::Read`] type.
     pub fn compression_type(&self) -> CompressionType {
         self.compression_type
     }
 
+    /// Yields the entries in key-order.
     pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
         match &mut self.current_block {
             Some(block) => {
@@ -57,6 +61,10 @@ impl<R: io::Read> Reader<R> {
         }
     }
 
+    /// Consumes the [`Reader`] and returns the underlying [`io::Read`] type.
+    ///
+    /// The returned [`io::Read`] type has been [`io::Seek`]ed which means that
+    /// you must seek it back to the front to be read from the start.
     pub fn into_inner(self) -> R {
         self.reader
     }
