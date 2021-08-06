@@ -50,6 +50,8 @@
 //! # Ok(()) }
 //! ```
 
+#![warn(missing_docs)]
+
 #[cfg(test)]
 #[macro_use]
 extern crate quickcheck;
