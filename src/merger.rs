@@ -19,7 +19,7 @@ impl<R, MF> MergerBuilder<R, MF> {
     }
 
     /// Add a source to merge, this function can be chained.
-    pub fn add(&mut self, source: Reader<R>) -> &mut Self {
+    pub fn add(mut self, source: Reader<R>) -> Self {
         self.push(source);
         self
     }
