@@ -98,6 +98,7 @@ impl<R: io::Read, MF> Merger<R, MF> {
             heap,
             current_key: Vec::new(),
             merged_value: Vec::new(),
+            tmp_entries: Vec::new(),
         })
     }
 }
@@ -123,6 +124,8 @@ pub struct MergerIter<R, MF> {
     heap: BinaryHeap<Entry<R>>,
     current_key: Vec<u8>,
     merged_value: Vec<u8>,
+    /// We keep this buffer to avoid allocating a vec every time.
+    tmp_entries: Vec<Entry<R>>,
 }
 
 impl<R, MF, U> MergerIter<R, MF>
@@ -142,12 +145,12 @@ where
             None => return Ok(None),
         };
 
-        let mut other_entries = Vec::new();
+        self.tmp_entries.clear();
         while let Some(entry) = self.heap.peek() {
             if let Some((key, _value)) = entry.iter.current() {
                 if first_key == key {
                     if let Some(entry) = self.heap.pop() {
-                        other_entries.push(entry);
+                        self.tmp_entries.push(entry);
                     }
                 } else {
                     break;
@@ -155,7 +158,8 @@ where
             }
         }
 
-        let other_values = other_entries.iter().filter_map(|e| e.iter.current().map(|(_k, v)| v));
+        /// Extract the currently pointed values from the entries.
+        let other_values = self.tmp_entries.iter().filter_map(|e| e.iter.current().map(|(_, v)| v));
         let values: Vec<_> = once(first_value).chain(other_values).map(Cow::Borrowed).collect();
 
         match (self.merge)(&first_key, &values) {
@@ -174,7 +178,7 @@ where
         }
 
         // Don't forget to put the entries back into the heap.
-        for mut entry in once(first_entry).chain(other_entries) {
+        for mut entry in once(first_entry).chain(self.tmp_entries.drain(..)) {
             if entry.iter.next().map_err(Error::convert_merge_error)?.is_some() {
                 self.heap.push(entry);
             }
