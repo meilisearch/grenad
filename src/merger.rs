@@ -1,7 +1,8 @@
 use std::borrow::Cow;
-use std::cmp::{Ordering, Reverse};
-use std::collections::binary_heap::{BinaryHeap, PeekMut};
-use std::{io, mem};
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+use std::io;
+use std::iter::once;
 
 use crate::{Error, Reader, Writer};
 
@@ -43,25 +44,25 @@ impl<R, MF> Extend<Reader<R>> for MergerBuilder<R, MF> {
 
 struct Entry<R> {
     iter: Reader<R>,
-    key: Vec<u8>,
-    value: Vec<u8>,
 }
 
-impl<R: io::Read> Ord for Entry<R> {
+impl<R> Ord for Entry<R> {
     fn cmp(&self, other: &Entry<R>) -> Ordering {
-        self.key.cmp(&other.key)
+        let skey = self.iter.current().map(|(k, _)| k);
+        let okey = other.iter.current().map(|(k, _)| k);
+        skey.cmp(&okey).reverse()
     }
 }
 
-impl<R: io::Read> Eq for Entry<R> {}
+impl<R> Eq for Entry<R> {}
 
-impl<R: io::Read> PartialEq for Entry<R> {
+impl<R> PartialEq for Entry<R> {
     fn eq(&self, other: &Entry<R>) -> bool {
-        self.key == other.key
+        self.cmp(other) == Ordering::Equal
     }
 }
 
-impl<R: io::Read> PartialOrd for Entry<R> {
+impl<R> PartialOrd for Entry<R> {
     fn partial_cmp(&self, other: &Entry<R>) -> Option<Ordering> {
         Some(self.cmp(other))
     }
@@ -87,20 +88,17 @@ impl<R: io::Read, MF> Merger<R, MF> {
     pub fn into_merger_iter(self) -> Result<MergerIter<R, MF>, Error> {
         let mut heap = BinaryHeap::new();
         for mut source in self.sources {
-            if let Some((key, value)) = source.next()? {
-                let key = key.to_vec();
-                let value = value.to_vec();
-                heap.push(Reverse(Entry { iter: source, key, value }));
+            if source.next()?.is_some() {
+                heap.push(Entry { iter: source });
             }
         }
 
         Ok(MergerIter {
             merge: self.merge,
             heap,
-            cur_key: Vec::new(),
-            cur_vals: Vec::new(),
-            merged_val: Vec::new(),
-            pending: false,
+            current_key: Vec::new(),
+            merged_value: Vec::new(),
+            tmp_entries: Vec::new(),
         })
     }
 }
@@ -123,11 +121,11 @@ where
 /// An iterator that yield the merged entries in key-order.
 pub struct MergerIter<R, MF> {
     merge: MF,
-    heap: BinaryHeap<Reverse<Entry<R>>>,
-    cur_key: Vec<u8>,
-    cur_vals: Vec<Cow<'static, [u8]>>,
-    merged_val: Vec<u8>,
-    pending: bool,
+    heap: BinaryHeap<Entry<R>>,
+    current_key: Vec<u8>,
+    merged_value: Vec<u8>,
+    /// We keep this buffer to avoid allocating a vec every time.
+    tmp_entries: Vec<Entry<R>>,
 }
 
 impl<R, MF, U> MergerIter<R, MF>
@@ -137,49 +135,55 @@ where
 {
     /// Yield the entries in key-order where values have been merged when needed.
     pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error<U>> {
-        self.cur_key.clear();
-        self.cur_vals.clear();
+        let first_entry = match self.heap.pop() {
+            Some(entry) => entry,
+            None => return Ok(None),
+        };
 
-        while let Some(mut entry) = self.heap.peek_mut() {
-            if self.cur_key.is_empty() {
-                self.cur_key.extend_from_slice(&entry.0.key);
-                self.cur_vals.clear();
-                self.pending = true;
-            }
+        let (first_key, first_value) = match first_entry.iter.current() {
+            Some((key, value)) => (key, value),
+            None => return Ok(None),
+        };
 
-            if self.cur_key == entry.0.key {
-                self.cur_vals.push(Cow::Owned(mem::take(&mut entry.0.value)));
-                // Replace the key/value buffers by empty ones, empty Vecs don't
-                // allocate, this way we reuse the previously allocated memory.
-                let mut key_buffer = mem::take(&mut entry.0.key);
-                let mut value_buffer = mem::take(&mut entry.0.value);
-                match entry.0.iter.next().map_err(Error::convert_merge_error)? {
-                    Some((key, value)) => {
-                        key_buffer.clear();
-                        value_buffer.clear();
-                        key_buffer.extend_from_slice(key);
-                        value_buffer.extend_from_slice(value);
-                        entry.0.key = key_buffer;
-                        entry.0.value = value_buffer;
+        self.tmp_entries.clear();
+        while let Some(entry) = self.heap.peek() {
+            if let Some((key, _value)) = entry.iter.current() {
+                if first_key == key {
+                    if let Some(entry) = self.heap.pop() {
+                        self.tmp_entries.push(entry);
                     }
-                    None => {
-                        PeekMut::pop(entry);
+                } else {
+                    break;
+                }
+            }
+        }
+
+        /// Extract the currently pointed values from the entries.
+        let other_values = self.tmp_entries.iter().filter_map(|e| e.iter.current().map(|(_, v)| v));
+        let values: Vec<_> = once(first_value).chain(other_values).map(Cow::Borrowed).collect();
+
+        match (self.merge)(&first_key, &values) {
+            Ok(value) => {
+                self.current_key.clear();
+                self.current_key.extend_from_slice(first_key);
+                match value {
+                    Cow::Owned(value) => self.merged_value = value,
+                    Cow::Borrowed(value) => {
+                        self.merged_value.clear();
+                        self.merged_value.extend_from_slice(value);
                     }
                 }
-            } else {
-                break;
+            }
+            Err(e) => return Err(Error::Merge(e)),
+        }
+
+        // Don't forget to put the entries back into the heap.
+        for mut entry in once(first_entry).chain(self.tmp_entries.drain(..)) {
+            if entry.iter.next().map_err(Error::convert_merge_error)?.is_some() {
+                self.heap.push(entry);
             }
         }
 
-        if self.pending {
-            match (self.merge)(&self.cur_key, &self.cur_vals) {
-                Ok(value) => self.merged_val = value.into_owned(),
-                Err(e) => return Err(Error::Merge(e)),
-            }
-            self.pending = false;
-            Ok(Some((&self.cur_key, &self.merged_val)))
-        } else {
-            Ok(None)
-        }
+        Ok(Some((&self.current_key, &self.merged_value)))
     }
 }

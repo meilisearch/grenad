@@ -32,16 +32,11 @@ impl<R: io::Read> Reader<R> {
         Ok(Reader { compression_type, reader, current_block })
     }
 
-    /// Returns the [`CompressionType`] used by the underlying [`io::Read`] type.
-    pub fn compression_type(&self) -> CompressionType {
-        self.compression_type
-    }
-
     /// Yields the entries in key-order.
     pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
         match &mut self.current_block {
             Some(block) => {
-                match block.next()? {
+                match block.next() {
                     Some((key, val)) => {
                         // This is a trick to make the compiler happy...
                         // https://github.com/rust-lang/rust/issues/47680
@@ -53,12 +48,27 @@ impl<R: io::Read> Reader<R> {
                         if !block.read_from(&mut self.reader)? {
                             return Ok(None);
                         }
-                        block.next()
+                        Ok(block.next())
                     }
                 }
             }
             None => Ok(None),
         }
+    }
+}
+
+impl<R> Reader<R> {
+    /// Returns the [`CompressionType`] used by the underlying [`io::Read`] type.
+    pub fn compression_type(&self) -> CompressionType {
+        self.compression_type
+    }
+
+    /// Returns the value currently pointed by the [`BlockReader`].
+    pub(crate) fn current(&self) -> Option<(&[u8], &[u8])> {
+        let b = self.current_block.as_ref()?;
+        let offset = b.current_offset?;
+        let (key, value, _offset) = BlockReader::current(&b.buffer, offset)?;
+        Some((key, value))
     }
 
     /// Consumes the [`Reader`] and returns the underlying [`io::Read`] type.
@@ -74,7 +84,8 @@ impl<R: io::Read> Reader<R> {
 struct BlockReader {
     compression_type: CompressionType,
     buffer: Vec<u8>,
-    offset: usize,
+    current_offset: Option<usize>,
+    next_offset: usize,
 }
 
 impl BlockReader {
@@ -82,8 +93,12 @@ impl BlockReader {
         reader: &mut R,
         _type: CompressionType,
     ) -> Result<Option<BlockReader>, Error> {
-        let mut block_reader =
-            BlockReader { compression_type: _type, buffer: Vec::new(), offset: 0 };
+        let mut block_reader = BlockReader {
+            compression_type: _type,
+            buffer: Vec::new(),
+            current_offset: None,
+            next_offset: 0,
+        };
 
         if block_reader.read_from(reader)? {
             Ok(Some(block_reader))
@@ -102,7 +117,8 @@ impl BlockReader {
 
         // We reset the cursor's position and decompress
         // the block into the cursor's buffer.
-        self.offset = 0;
+        self.current_offset = None;
+        self.next_offset = 0;
         self.buffer.resize(block_len as usize, 0);
         reader.read_exact(&mut self.buffer)?;
 
@@ -113,30 +129,45 @@ impl BlockReader {
         Ok(true)
     }
 
-    fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
-        if self.buffer.len() == self.offset {
-            return Ok(None);
+    /// Returns the current key-value pair and the amount
+    /// of bytes to advance to read the next one.
+    fn current(buffer: &[u8], start_offset: usize) -> Option<(&[u8], &[u8], usize)> {
+        if buffer.len() == start_offset {
+            return None;
         }
+
+        let mut offset = start_offset;
 
         // Read the key length.
         let mut key_len = 0;
-        let len = varint_decode32(&self.buffer[self.offset..], &mut key_len);
-        self.offset += len;
+        let len = varint_decode32(&buffer[offset..], &mut key_len);
+        offset += len;
 
         // Read the value length.
         let mut val_len = 0;
-        let len = varint_decode32(&self.buffer[self.offset..], &mut val_len);
-        self.offset += len;
+        let len = varint_decode32(&buffer[offset..], &mut val_len);
+        offset += len;
 
         // Read the key itself.
-        let key = &self.buffer[self.offset..self.offset + key_len as usize];
-        self.offset += key_len as usize;
+        let key = &buffer[offset..offset + key_len as usize];
+        offset += key_len as usize;
 
         // Read the value itself.
-        let val = &self.buffer[self.offset..self.offset + val_len as usize];
-        self.offset += val_len as usize;
+        let val = &buffer[offset..offset + val_len as usize];
+        offset += val_len as usize;
 
-        Ok(Some((key, val)))
+        Some((key, val, offset - start_offset))
+    }
+
+    fn next(&mut self) -> Option<(&[u8], &[u8])> {
+        match Self::current(&self.buffer, self.next_offset) {
+            Some((key, value, offset)) => {
+                self.current_offset = Some(self.next_offset);
+                self.next_offset += offset;
+                Some((key, value))
+            }
+            None => None,
+        }
     }
 }
 

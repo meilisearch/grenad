@@ -190,6 +190,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     #[cfg(all(feature = "zlib", feature = "snappy", feature = "zstd", feature = "lz4"))]
     fn check_all_compressions() {
         use CompressionType::*;
