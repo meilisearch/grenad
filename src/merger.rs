@@ -1,10 +1,9 @@
-use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::io;
 use std::iter::once;
 
-use crate::{Error, Reader, Writer};
+use crate::{Error, Merge, Reader, Writer};
 
 /// A struct that is used to configure a [`Merger`] with the sources to merge.
 pub struct MergerBuilder<R, MF> {
@@ -83,7 +82,7 @@ impl<R, MF> Merger<R, MF> {
     }
 }
 
-impl<R: io::Read, MF> Merger<R, MF> {
+impl<R: io::Read, MF: Merge> Merger<R, MF> {
     /// Consumes this [`Merger`] and outputs a stream of the merged entries in key-order.
     pub fn into_merger_iter(self) -> Result<MergerIter<R, MF>, Error> {
         let mut heap = BinaryHeap::new();
@@ -97,19 +96,19 @@ impl<R: io::Read, MF> Merger<R, MF> {
             merge: self.merge,
             heap,
             current_key: Vec::new(),
-            merged_value: Vec::new(),
+            merged_value: None,
             tmp_entries: Vec::new(),
         })
     }
 }
 
-impl<R, MF, U> Merger<R, MF>
+impl<R, MF> Merger<R, MF>
 where
     R: io::Read,
-    MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
+    MF: Merge,
 {
     /// Consumes this [`Merger`] and streams the entries to the [`Writer`] given in parameter.
-    pub fn write_into<W: io::Write>(self, writer: &mut Writer<W>) -> Result<(), Error<U>> {
+    pub fn write_into<W: io::Write>(self, writer: &mut Writer<W>) -> Result<(), Error<MF::Error>> {
         let mut iter = self.into_merger_iter().map_err(Error::convert_merge_error)?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
@@ -119,22 +118,22 @@ where
 }
 
 /// An iterator that yield the merged entries in key-order.
-pub struct MergerIter<R, MF> {
+pub struct MergerIter<R, MF: Merge> {
     merge: MF,
     heap: BinaryHeap<Entry<R>>,
     current_key: Vec<u8>,
-    merged_value: Vec<u8>,
+    merged_value: Option<MF::Output>,
     /// We keep this buffer to avoid allocating a vec every time.
     tmp_entries: Vec<Entry<R>>,
 }
 
-impl<R, MF, U> MergerIter<R, MF>
+impl<R, MF> MergerIter<R, MF>
 where
     R: io::Read,
-    MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
+    MF: Merge,
 {
     /// Yield the entries in key-order where values have been merged when needed.
-    pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error<U>> {
+    pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error<MF::Error>> {
         let first_entry = match self.heap.pop() {
             Some(entry) => entry,
             None => return Ok(None),
@@ -158,21 +157,15 @@ where
             }
         }
 
-        /// Extract the currently pointed values from the entries.
+        // Extract the currently pointed values from the entries.
         let other_values = self.tmp_entries.iter().filter_map(|e| e.iter.current().map(|(_, v)| v));
-        let values: Vec<_> = once(first_value).chain(other_values).map(Cow::Borrowed).collect();
+        let values = once(first_value).chain(other_values);
 
-        match (self.merge)(&first_key, &values) {
+        match self.merge.merge(&first_key, values) {
             Ok(value) => {
                 self.current_key.clear();
                 self.current_key.extend_from_slice(first_key);
-                match value {
-                    Cow::Owned(value) => self.merged_value = value,
-                    Cow::Borrowed(value) => {
-                        self.merged_value.clear();
-                        self.merged_value.extend_from_slice(value);
-                    }
-                }
+                self.merged_value = Some(value);
             }
             Err(e) => return Err(Error::Merge(e)),
         }
@@ -184,6 +177,9 @@ where
             }
         }
 
-        Ok(Some((&self.current_key, &self.merged_value)))
+        match self.merged_value.as_ref() {
+            Some(value) => Ok(Some((&self.current_key, value.as_ref()))),
+            None => Ok(None),
+        }
     }
 }
