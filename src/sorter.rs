@@ -296,7 +296,7 @@ impl Drop for EntryBoundAlignedBuffer {
 /// You can insert key-value pairs in arbitrary order, it will use the
 /// [`ChunkCreator`] and you the generated chunks to buffer when the `dump_threashold`
 /// setting is reached.
-pub struct Sorter<MF, CC: ChunkCreator> {
+pub struct Sorter<MF, CC: ChunkCreator = DefaultChunkCreator> {
     chunks: Vec<CC::Chunk>,
     entries: Entries,
     allow_realloc: bool,
