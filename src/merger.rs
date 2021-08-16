@@ -158,7 +158,7 @@ where
             }
         }
 
-        /// Extract the currently pointed values from the entries.
+        // Extract the currently pointed values from the entries.
         let other_values = self.tmp_entries.iter().filter_map(|e| e.iter.current().map(|(_, v)| v));
         let values: Vec<_> = once(first_value).chain(other_values).map(Cow::Borrowed).collect();
 
