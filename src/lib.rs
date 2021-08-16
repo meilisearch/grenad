@@ -39,23 +39,31 @@
 //! use std::convert::TryInto;
 //! use std::io::Cursor;
 //!
-//! use grenad::{MergerBuilder, Reader, Writer};
+//! use grenad::{Merge, MergerBuilder, Reader, Writer};
 //!
-//! // This merge function:
+//! // This merger:
 //! //  - parses u32s from native-endian bytes,
 //! //  - wrapping sums them and,
 //! //  - outputs the result as native-endian bytes.
-//! fn wrapping_sum_u32s<'a>(
-//!     _key: &[u8],
-//!     values: &[Cow<'a, [u8]>],
-//! ) -> Result<Cow<'a, [u8]>, TryFromSliceError>
-//! {
-//!     let mut output: u32 = 0;
-//!     for bytes in values.iter().map(AsRef::as_ref) {
-//!         let num = bytes.try_into().map(u32::from_ne_bytes)?;
-//!         output = output.wrapping_add(num);
+//! #[derive(Clone, Copy)]
+//! struct WrappingSumU32s;
+//!
+//! impl Merge for WrappingSumU32s {
+//!     type Error = TryFromSliceError;
+//!     type Output = [u8; 4];
+//!
+//!     fn merge<I, A>(&self, key: &[u8], values: I) -> Result<Self::Output, Self::Error>
+//!     where
+//!         I: IntoIterator<Item = A>,
+//!         A: AsRef<[u8]>
+//!     {
+//!         let mut output: u32 = 0;
+//!         for value in values {
+//!             let num = value.as_ref().try_into().map(u32::from_ne_bytes)?;
+//!             output = output.wrapping_add(num);
+//!         }
+//!         Ok(output.to_ne_bytes())
 //!     }
-//!     Ok(Cow::Owned(output.to_ne_bytes().to_vec()))
 //! }
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -82,7 +90,7 @@
 //!
 //! // We create a merger that will sum our u32s when necessary,
 //! // and we add our readers to the list of readers to merge.
-//! let merger_builder = MergerBuilder::new(wrapping_sum_u32s);
+//! let merger_builder = MergerBuilder::new(WrappingSumU32s);
 //! let merger = merger_builder.add(readera).add(readerb).add(readerc).build();
 //!
 //! // We can iterate over the entries in key-order.
@@ -106,28 +114,36 @@
 //! use std::borrow::Cow;
 //! use std::convert::TryInto;
 //!
-//! use grenad::{CursorVec, SorterBuilder};
+//! use grenad::{Merge, CursorVec, SorterBuilder};
 //!
-//! // This merge function:
+//! // This merger:
 //! //  - parses u32s from native-endian bytes,
 //! //  - wrapping sums them and,
 //! //  - outputs the result as native-endian bytes.
-//! fn wrapping_sum_u32s<'a>(
-//!     _key: &[u8],
-//!     values: &[Cow<'a, [u8]>],
-//! ) -> Result<Cow<'a, [u8]>, TryFromSliceError>
-//! {
-//!     let mut output: u32 = 0;
-//!     for bytes in values.iter().map(AsRef::as_ref) {
-//!         let num = bytes.try_into().map(u32::from_ne_bytes)?;
-//!         output = output.wrapping_add(num);
+//! #[derive(Clone, Copy)]
+//! struct WrappingSumU32s;
+//!
+//! impl Merge for WrappingSumU32s {
+//!     type Error = TryFromSliceError;
+//!     type Output = [u8; 4];
+//!
+//!     fn merge<I, A>(&self, key: &[u8], values: I) -> Result<Self::Output, Self::Error>
+//!     where
+//!         I: IntoIterator<Item = A>,
+//!         A: AsRef<[u8]>
+//!     {
+//!         let mut output: u32 = 0;
+//!         for value in values {
+//!             let num = value.as_ref().try_into().map(u32::from_ne_bytes)?;
+//!             output = output.wrapping_add(num);
+//!         }
+//!         Ok(output.to_ne_bytes())
 //!     }
-//!     Ok(Cow::Owned(output.to_ne_bytes().to_vec()))
 //! }
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! // We create a sorter that will sum our u32s when necessary.
-//! let mut sorter = SorterBuilder::new(wrapping_sum_u32s).chunk_creator(CursorVec).build();
+//! let mut sorter = SorterBuilder::new(WrappingSumU32s).chunk_creator(CursorVec).build();
 //!
 //! // We insert multiple entries with the same key but different values
 //! // in arbitrary order, the sorter will take care of merging them for us.
@@ -158,6 +174,7 @@ extern crate quickcheck;
 mod block_builder;
 mod compression;
 mod error;
+mod merge;
 mod merger;
 mod reader;
 mod sorter;
@@ -166,6 +183,7 @@ mod writer;
 
 pub use self::compression::CompressionType;
 pub use self::error::Error;
+pub use self::merge::Merge;
 pub use self::merger::{Merger, MergerBuilder, MergerIter};
 pub use self::reader::Reader;
 #[cfg(feature = "tempfile")]

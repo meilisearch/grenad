@@ -1,5 +1,4 @@
 use std::alloc::{alloc, dealloc, Layout};
-use std::borrow::Cow;
 use std::convert::Infallible;
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
@@ -15,7 +14,7 @@ const MIN_SORTER_MEMORY: usize = 10_485_760; // 10MB
 const DEFAULT_NB_CHUNKS: usize = 25;
 const MIN_NB_CHUNKS: usize = 1;
 
-use crate::{CompressionType, Error, Merger, MergerIter, Reader, Writer, WriterBuilder};
+use crate::{CompressionType, Error, Merge, Merger, MergerIter, Reader, Writer, WriterBuilder};
 
 /// A struct that is used to configure a [`Sorter`] to better fit your needs.
 #[derive(Debug, Clone, Copy)]
@@ -321,14 +320,14 @@ impl<MF> Sorter<MF, DefaultChunkCreator> {
     }
 }
 
-impl<MF, CC, U> Sorter<MF, CC>
+impl<MF, CC> Sorter<MF, CC>
 where
-    MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
+    MF: Merge,
     CC: ChunkCreator,
 {
     /// Insert an entry into the [`Sorter`] making sure that conflicts
     /// are resolved by the provided merge function.
-    pub fn insert<K, V>(&mut self, key: K, val: V) -> Result<(), Error<U>>
+    pub fn insert<K, V>(&mut self, key: K, val: V) -> Result<(), Error<MF::Error>>
     where
         K: AsRef<[u8]>,
         V: AsRef<[u8]>,
@@ -354,7 +353,7 @@ where
         self.entries.memory_usage() >= self.dump_threshold
     }
 
-    fn write_chunk(&mut self) -> Result<(), Error<U>> {
+    fn write_chunk(&mut self) -> Result<(), Error<MF::Error>> {
         let chunk =
             self.chunk_creator.create().map_err(Into::into).map_err(Error::convert_merge_error)?;
         let mut writer = WriterBuilder::new()
@@ -367,22 +366,23 @@ where
         let mut current = None;
         for (key, value) in self.entries.iter() {
             match current.as_mut() {
-                None => current = Some((key, vec![Cow::Borrowed(value)])),
+                None => current = Some((key, vec![value])),
                 Some((current_key, vals)) => {
                     if current_key != &key {
-                        let merged_val = (self.merge)(current_key, vals).map_err(Error::Merge)?;
-                        writer.insert(&current_key, &merged_val)?;
+                        let merged_val =
+                            self.merge.merge(current_key, vals.iter()).map_err(Error::Merge)?;
+                        writer.insert(&current_key, merged_val)?;
                         vals.clear();
                         *current_key = key;
                     }
-                    vals.push(Cow::Borrowed(value));
+                    vals.push(value);
                 }
             }
         }
 
         if let Some((key, vals)) = current.take() {
-            let merged_val = (self.merge)(key, &vals).map_err(Error::Merge)?;
-            writer.insert(&key, &merged_val)?;
+            let merged_val = self.merge.merge(key, vals).map_err(Error::Merge)?;
+            writer.insert(&key, merged_val)?;
         }
 
         let chunk = writer.into_inner()?;
@@ -392,7 +392,7 @@ where
         Ok(())
     }
 
-    fn merge_chunks(&mut self) -> Result<(), Error<U>> {
+    fn merge_chunks(&mut self) -> Result<(), Error<MF::Error>> {
         let chunk =
             self.chunk_creator.create().map_err(Into::into).map_err(Error::convert_merge_error)?;
         let mut writer = WriterBuilder::new()
@@ -400,7 +400,7 @@ where
             .compression_level(self.chunk_compression_level)
             .build(chunk)?;
 
-        let sources: Result<Vec<_>, Error<U>> = self
+        let sources: Result<Vec<_>, Error<MF::Error>> = self
             .chunks
             .drain(..)
             .map(|mut chunk| {
@@ -426,7 +426,7 @@ where
     }
 
     /// Consumes this [`Sorter`] and streams the entries to the [`Writer`] given in parameter.
-    pub fn write_into<W: io::Write>(self, writer: &mut Writer<W>) -> Result<(), Error<U>> {
+    pub fn write_into<W: io::Write>(self, writer: &mut Writer<W>) -> Result<(), Error<MF::Error>> {
         let mut iter = self.into_merger_iter()?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
@@ -435,16 +435,16 @@ where
     }
 
     /// Consumes this [`Sorter`] and outputs a stream of the merged entries in key-order.
-    pub fn into_merger_iter(mut self) -> Result<MergerIter<CC::Chunk, MF>, Error<U>> {
+    pub fn into_merger_iter(mut self) -> Result<MergerIter<CC::Chunk, MF>, Error<MF::Error>> {
         // Flush the pending unordered entries.
         self.write_chunk()?;
 
-        let sources: Result<Vec<_>, Error<U>> = self
+        let sources: Result<Vec<_>, _> = self
             .chunks
             .into_iter()
-            .map(|mut file| {
-                file.seek(SeekFrom::Start(0))?;
-                Reader::new(file).map_err(Error::convert_merge_error)
+            .map(|mut chunk| {
+                chunk.seek(SeekFrom::Start(0))?;
+                Reader::new(chunk).map_err(Error::convert_merge_error)
             })
             .collect();
 
@@ -518,13 +518,29 @@ mod tests {
 
     use super::*;
 
-    fn merge<'a>(_key: &[u8], vals: &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, Infallible> {
-        Ok(vals.iter().map(AsRef::as_ref).flatten().cloned().collect())
+    #[derive(Clone, Copy)]
+    struct ConcatBytes;
+
+    impl Merge for ConcatBytes {
+        type Error = Infallible;
+        type Output = Vec<u8>;
+
+        fn merge<I, A>(&self, _key: &[u8], values: I) -> Result<Self::Output, Self::Error>
+        where
+            I: IntoIterator<Item = A>,
+            A: AsRef<[u8]>,
+        {
+            let mut output = Vec::new();
+            for value in values {
+                output.extend_from_slice(value.as_ref());
+            }
+            Ok(output)
+        }
     }
 
     #[test]
     fn simple_cursorvec() {
-        let mut sorter = SorterBuilder::new(merge)
+        let mut sorter = SorterBuilder::new(ConcatBytes)
             .chunk_compression_type(CompressionType::Snappy)
             .chunk_creator(CursorVec)
             .build();
@@ -551,7 +567,7 @@ mod tests {
 
     #[test]
     fn hard_cursorvec() {
-        let mut sorter = SorterBuilder::new(merge)
+        let mut sorter = SorterBuilder::new(ConcatBytes)
             .dump_threshold(1024) // 1KiB
             .allow_realloc(false)
             .chunk_compression_type(CompressionType::Snappy)
