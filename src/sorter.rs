@@ -265,6 +265,7 @@ impl EntryBoundAlignedBuffer {
         let size = (size + entry_bound_size - 1) / entry_bound_size * entry_bound_size;
         let layout = Layout::from_size_align(size, align_of::<EntryBound>()).unwrap();
         let ptr = unsafe { alloc(layout) };
+        assert!(!ptr.is_null(), "the allocator is unable to allocate that much memory");
         let slice = unsafe { slice::from_raw_parts_mut(ptr, size) };
         EntryBoundAlignedBuffer(slice)
     }
