@@ -15,7 +15,10 @@ const MIN_SORTER_MEMORY: usize = 10_485_760; // 10MB
 const DEFAULT_NB_CHUNKS: usize = 25;
 const MIN_NB_CHUNKS: usize = 1;
 
-use crate::{CompressionType, Error, Merger, MergerIter, Reader, Writer, WriterBuilder};
+use crate::{
+    CompressionType, Error, StreamMerger, StreamMergerIter, StreamReader, StreamWriter,
+    StreamWriterBuilder,
+};
 
 /// A struct that is used to configure a [`Sorter`] to better fit your needs.
 #[derive(Debug, Clone, Copy)]
@@ -358,7 +361,7 @@ where
     fn write_chunk(&mut self) -> Result<(), Error<U>> {
         let chunk =
             self.chunk_creator.create().map_err(Into::into).map_err(Error::convert_merge_error)?;
-        let mut writer = WriterBuilder::new()
+        let mut writer = StreamWriterBuilder::new()
             .compression_type(self.chunk_compression_type)
             .compression_level(self.chunk_compression_level)
             .build(chunk)?;
@@ -396,7 +399,7 @@ where
     fn merge_chunks(&mut self) -> Result<(), Error<U>> {
         let chunk =
             self.chunk_creator.create().map_err(Into::into).map_err(Error::convert_merge_error)?;
-        let mut writer = WriterBuilder::new()
+        let mut writer = StreamWriterBuilder::new()
             .compression_type(self.chunk_compression_type)
             .compression_level(self.chunk_compression_level)
             .build(chunk)?;
@@ -406,16 +409,16 @@ where
             .drain(..)
             .map(|mut chunk| {
                 chunk.seek(SeekFrom::Start(0))?;
-                Reader::new(chunk).map_err(Error::convert_merge_error)
+                StreamReader::new(chunk).map_err(Error::convert_merge_error)
             })
             .collect();
 
         // Create a merger to merge all those chunks.
-        let mut builder = Merger::builder(&self.merge);
+        let mut builder = StreamMerger::builder(&self.merge);
         builder.extend(sources?);
         let merger = builder.build();
 
-        let mut iter = merger.into_merger_iter().map_err(Error::convert_merge_error)?;
+        let mut iter = merger.into_stream_merger_iter().map_err(Error::convert_merge_error)?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
         }
@@ -426,9 +429,12 @@ where
         Ok(())
     }
 
-    /// Consumes this [`Sorter`] and streams the entries to the [`Writer`] given in parameter.
-    pub fn write_into<W: io::Write>(self, writer: &mut Writer<W>) -> Result<(), Error<U>> {
-        let mut iter = self.into_merger_iter()?;
+    /// Consumes this [`Sorter`] and streams the entries to the [`StreamWriter`] given in parameter.
+    pub fn write_into_stream_writer<W: io::Write>(
+        self,
+        writer: &mut StreamWriter<W>,
+    ) -> Result<(), Error<U>> {
+        let mut iter = self.into_stream_merger_iter()?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
         }
@@ -436,7 +442,7 @@ where
     }
 
     /// Consumes this [`Sorter`] and outputs a stream of the merged entries in key-order.
-    pub fn into_merger_iter(mut self) -> Result<MergerIter<CC::Chunk, MF>, Error<U>> {
+    pub fn into_stream_merger_iter(mut self) -> Result<StreamMergerIter<CC::Chunk, MF>, Error<U>> {
         // Flush the pending unordered entries.
         self.write_chunk()?;
 
@@ -445,14 +451,14 @@ where
             .into_iter()
             .map(|mut file| {
                 file.seek(SeekFrom::Start(0))?;
-                Reader::new(file).map_err(Error::convert_merge_error)
+                StreamReader::new(file).map_err(Error::convert_merge_error)
             })
             .collect();
 
-        let mut builder = Merger::builder(self.merge);
+        let mut builder = StreamMerger::builder(self.merge);
         builder.extend(sources?);
 
-        builder.build().into_merger_iter().map_err(Error::convert_merge_error)
+        builder.build().into_stream_merger_iter().map_err(Error::convert_merge_error)
     }
 }
 
@@ -535,11 +541,11 @@ mod tests {
         sorter.insert(b"allo", "lol").unwrap();
         sorter.insert(b"abstract", "lol").unwrap();
 
-        let mut bytes = WriterBuilder::new().memory();
-        sorter.write_into(&mut bytes).unwrap();
+        let mut bytes = StreamWriterBuilder::new().memory();
+        sorter.write_into_stream_writer(&mut bytes).unwrap();
         let bytes = bytes.into_inner().unwrap();
 
-        let mut reader = Reader::new(bytes.as_slice()).unwrap();
+        let mut reader = StreamReader::new(bytes.as_slice()).unwrap();
         while let Some((key, val)) = reader.next().unwrap() {
             match key {
                 b"hello" => assert_eq!(val, b"kiki"),
@@ -566,11 +572,11 @@ mod tests {
             sorter.insert(b"hello", "kiki").unwrap();
         }
 
-        let mut bytes = WriterBuilder::new().memory();
-        sorter.write_into(&mut bytes).unwrap();
+        let mut bytes = StreamWriterBuilder::new().memory();
+        sorter.write_into_stream_writer(&mut bytes).unwrap();
         let bytes = bytes.into_inner().unwrap();
 
-        let mut reader = Reader::new(bytes.as_slice()).unwrap();
+        let mut reader = StreamReader::new(bytes.as_slice()).unwrap();
         let (key, val) = reader.next().unwrap().unwrap();
         assert_eq!(key, b"hello");
         assert!(val.iter().eq(repeat(b"kiki").take(200).flatten()));

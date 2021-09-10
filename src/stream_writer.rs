@@ -6,16 +6,16 @@ use byteorder::{BigEndian, WriteBytesExt};
 use crate::block_builder::{BlockBuilder, DEFAULT_BLOCK_SIZE};
 use crate::compression::{compress, CompressionType};
 
-/// A struct that is used to configure a [`Writer`].
-pub struct WriterBuilder {
+/// A struct that is used to configure a [`StreamWriter`].
+pub struct StreamWriterBuilder {
     compression_type: CompressionType,
     compression_level: u32,
     block_size: usize,
 }
 
-impl Default for WriterBuilder {
-    fn default() -> WriterBuilder {
-        WriterBuilder {
+impl Default for StreamWriterBuilder {
+    fn default() -> StreamWriterBuilder {
+        StreamWriterBuilder {
             compression_type: CompressionType::None,
             compression_level: 0,
             block_size: DEFAULT_BLOCK_SIZE,
@@ -23,11 +23,11 @@ impl Default for WriterBuilder {
     }
 }
 
-impl WriterBuilder {
-    /// Creates a [`WriterBuilder`], it can be used to
-    /// configure your [`Writer`] to better fit your needs.
-    pub fn new() -> WriterBuilder {
-        WriterBuilder::default()
+impl StreamWriterBuilder {
+    /// Creates a [`StreamWriterBuilder`], it can be used to
+    /// configure your [`StreamWriter`] to better fit your needs.
+    pub fn new() -> StreamWriterBuilder {
+        StreamWriterBuilder::default()
     }
 
     /// Defines the [`CompressionType`] that will be used to compress the writer blocks.
@@ -52,13 +52,13 @@ impl WriterBuilder {
         self
     }
 
-    /// Creates the [`Writer`] that will write into the provided [`io::Write`] type.
-    pub fn build<W: io::Write>(&self, mut writer: W) -> io::Result<Writer<W>> {
+    /// Creates the [`StreamWriter`] that will write into the provided [`io::Write`] type.
+    pub fn build<W: io::Write>(&self, mut writer: W) -> io::Result<StreamWriter<W>> {
         // We first write the compression type.
         // TODO write a magic number too.
         writer.write_u8(self.compression_type as u8)?;
 
-        Ok(Writer {
+        Ok(StreamWriter {
             block_builder: BlockBuilder::new(self.block_size),
             compression_type: self.compression_type,
             compression_level: self.compression_level,
@@ -66,39 +66,39 @@ impl WriterBuilder {
         })
     }
 
-    /// Creates the [`Writer`] that will write into a [`Vec`] of bytes.
-    pub fn memory(&mut self) -> Writer<Vec<u8>> {
+    /// Creates the [`StreamWriter`] that will write into a [`Vec`] of bytes.
+    pub fn memory(&mut self) -> StreamWriter<Vec<u8>> {
         self.build(Vec::new()).unwrap()
     }
 }
 
 /// A struct you can use to write entries into any [`io::Write`] type,
 /// entries must be inserted in key-order.
-pub struct Writer<W> {
+pub struct StreamWriter<W> {
     block_builder: BlockBuilder,
     compression_type: CompressionType,
     compression_level: u32,
     writer: W,
 }
 
-impl Writer<Vec<u8>> {
-    /// Creates a [`Writer`] that will write into a [`Vec`] of bytes.
-    pub fn memory() -> Writer<Vec<u8>> {
-        WriterBuilder::new().memory()
+impl StreamWriter<Vec<u8>> {
+    /// Creates a [`StreamWriter`] that will write into a [`Vec`] of bytes.
+    pub fn memory() -> StreamWriter<Vec<u8>> {
+        StreamWriterBuilder::new().memory()
     }
 }
 
-impl Writer<()> {
-    /// Creates a [`WriterBuilder`], it can be used to configure your [`Writer`].
-    pub fn builder() -> WriterBuilder {
-        WriterBuilder::default()
+impl StreamWriter<()> {
+    /// Creates a [`StreamWriterBuilder`], it can be used to configure your [`StreamWriter`].
+    pub fn builder() -> StreamWriterBuilder {
+        StreamWriterBuilder::default()
     }
 }
 
-impl<W: io::Write> Writer<W> {
-    /// Creates a [`Writer`] that will write into the provided [`io::Write`] type.
-    pub fn new(writer: W) -> io::Result<Writer<W>> {
-        WriterBuilder::new().build(writer)
+impl<W: io::Write> StreamWriter<W> {
+    /// Creates a [`StreamWriter`] that will write into the provided [`io::Write`] type.
+    pub fn new(writer: W) -> io::Result<StreamWriter<W>> {
+        StreamWriterBuilder::new().build(writer)
     }
 
     /// Writes the provided entry into the underlying [`io::Write`] type,
@@ -120,14 +120,14 @@ impl<W: io::Write> Writer<W> {
         Ok(())
     }
 
-    /// Consumes this [`Writer`] and fetches the latest block currently being built.
+    /// Consumes this [`StreamWriter`] and fetches the latest block currently being built.
     ///
     /// You must call this method before using the underlying [`io::Write`] type.
     pub fn finish(self) -> io::Result<()> {
         self.into_inner().map(drop)
     }
 
-    /// Consumes this [`Writer`] and fetches the latest block currenty being built.
+    /// Consumes this [`StreamWriter`] and fetches the latest block currenty being built.
     ///
     /// Returns the underlying [`io::Write`] provided type.
     pub fn into_inner(mut self) -> io::Result<W> {
@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn no_compression() {
-        let wb = Writer::builder();
+        let wb = StreamWriter::builder();
         let mut writer = wb.build(Vec::new()).unwrap();
 
         for x in 0..2000u32 {
@@ -167,7 +167,7 @@ mod tests {
     #[cfg(feature = "snappy")]
     #[test]
     fn snappy_compression() {
-        let mut wb = Writer::builder();
+        let mut wb = StreamWriter::builder();
         wb.compression_type(CompressionType::Snappy);
         let mut writer = wb.build(Vec::new()).unwrap();
 

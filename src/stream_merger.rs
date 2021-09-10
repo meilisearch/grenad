@@ -4,46 +4,46 @@ use std::collections::BinaryHeap;
 use std::io;
 use std::iter::once;
 
-use crate::{Error, Reader, Writer};
+use crate::{Error, StreamReader, StreamWriter};
 
-/// A struct that is used to configure a [`Merger`] with the sources to merge.
-pub struct MergerBuilder<R, MF> {
-    sources: Vec<Reader<R>>,
+/// A struct that is used to configure a [`StreamMerger`] with the sources to merge.
+pub struct StreamMergerBuilder<R, MF> {
+    sources: Vec<StreamReader<R>>,
     merge: MF,
 }
 
-impl<R, MF> MergerBuilder<R, MF> {
-    /// Creates a [`MergerBuilder`] from a merge function, it can be
-    /// used to configure your [`Merger`] with the sources to merge.
+impl<R, MF> StreamMergerBuilder<R, MF> {
+    /// Creates a [`StreamMergerBuilder`] from a merge function, it can be
+    /// used to configure your [`StreamMerger`] with the sources to merge.
     pub fn new(merge: MF) -> Self {
-        MergerBuilder { merge, sources: Vec::new() }
+        StreamMergerBuilder { merge, sources: Vec::new() }
     }
 
     /// Add a source to merge, this function can be chained.
-    pub fn add(mut self, source: Reader<R>) -> Self {
+    pub fn add(mut self, source: StreamReader<R>) -> Self {
         self.push(source);
         self
     }
 
     /// Push a source to merge, this function can be used in a loop.
-    pub fn push(&mut self, source: Reader<R>) {
+    pub fn push(&mut self, source: StreamReader<R>) {
         self.sources.push(source);
     }
 
-    /// Creates a [`Merger`] that will merge the sources.
-    pub fn build(self) -> Merger<R, MF> {
-        Merger { sources: self.sources, merge: self.merge }
+    /// Creates a [`StreamMerger`] that will merge the sources.
+    pub fn build(self) -> StreamMerger<R, MF> {
+        StreamMerger { sources: self.sources, merge: self.merge }
     }
 }
 
-impl<R, MF> Extend<Reader<R>> for MergerBuilder<R, MF> {
-    fn extend<T: IntoIterator<Item = Reader<R>>>(&mut self, iter: T) {
+impl<R, MF> Extend<StreamReader<R>> for StreamMergerBuilder<R, MF> {
+    fn extend<T: IntoIterator<Item = StreamReader<R>>>(&mut self, iter: T) {
         self.sources.extend(iter);
     }
 }
 
 struct Entry<R> {
-    iter: Reader<R>,
+    iter: StreamReader<R>,
 }
 
 impl<R> Ord for Entry<R> {
@@ -70,22 +70,22 @@ impl<R> PartialOrd for Entry<R> {
 
 /// A struct you can use to merge entries from the sources by using the merge
 /// function provided to merge values when entries have the same key.
-pub struct Merger<R, MF> {
-    sources: Vec<Reader<R>>,
+pub struct StreamMerger<R, MF> {
+    sources: Vec<StreamReader<R>>,
     merge: MF,
 }
 
-impl<R, MF> Merger<R, MF> {
-    /// Creates a [`MergerBuilder`] from a merge function, it can be
-    /// used to configure your [`Merger`] with the sources to merge.
-    pub fn builder(merge: MF) -> MergerBuilder<R, MF> {
-        MergerBuilder::new(merge)
+impl<R, MF> StreamMerger<R, MF> {
+    /// Creates a [`StreamMergerBuilder`] from a merge function, it can be
+    /// used to configure your [`StreamMerger`] with the sources to merge.
+    pub fn builder(merge: MF) -> StreamMergerBuilder<R, MF> {
+        StreamMergerBuilder::new(merge)
     }
 }
 
-impl<R: io::Read, MF> Merger<R, MF> {
-    /// Consumes this [`Merger`] and outputs a stream of the merged entries in key-order.
-    pub fn into_merger_iter(self) -> Result<MergerIter<R, MF>, Error> {
+impl<R: io::Read, MF> StreamMerger<R, MF> {
+    /// Consumes this [`StreamMerger`] and outputs a stream of the merged entries in key-order.
+    pub fn into_stream_merger_iter(self) -> Result<StreamMergerIter<R, MF>, Error> {
         let mut heap = BinaryHeap::new();
         for mut source in self.sources {
             if source.next()?.is_some() {
@@ -93,7 +93,7 @@ impl<R: io::Read, MF> Merger<R, MF> {
             }
         }
 
-        Ok(MergerIter {
+        Ok(StreamMergerIter {
             merge: self.merge,
             heap,
             current_key: Vec::new(),
@@ -103,14 +103,17 @@ impl<R: io::Read, MF> Merger<R, MF> {
     }
 }
 
-impl<R, MF, U> Merger<R, MF>
+impl<R, MF, U> StreamMerger<R, MF>
 where
     R: io::Read,
     MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
 {
-    /// Consumes this [`Merger`] and streams the entries to the [`Writer`] given in parameter.
-    pub fn write_into<W: io::Write>(self, writer: &mut Writer<W>) -> Result<(), Error<U>> {
-        let mut iter = self.into_merger_iter().map_err(Error::convert_merge_error)?;
+    /// Consumes this [`StreamMerger`] and streams the entries to the [`StreamWriter`] given in parameter.
+    pub fn write_into_stream_writer<W: io::Write>(
+        self,
+        writer: &mut StreamWriter<W>,
+    ) -> Result<(), Error<U>> {
+        let mut iter = self.into_stream_merger_iter().map_err(Error::convert_merge_error)?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
         }
@@ -119,7 +122,7 @@ where
 }
 
 /// An iterator that yield the merged entries in key-order.
-pub struct MergerIter<R, MF> {
+pub struct StreamMergerIter<R, MF> {
     merge: MF,
     heap: BinaryHeap<Entry<R>>,
     current_key: Vec<u8>,
@@ -128,7 +131,7 @@ pub struct MergerIter<R, MF> {
     tmp_entries: Vec<Entry<R>>,
 }
 
-impl<R, MF, U> MergerIter<R, MF>
+impl<R, MF, U> StreamMergerIter<R, MF>
 where
     R: io::Read,
     MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
