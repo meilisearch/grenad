@@ -187,13 +187,14 @@ fn lz4_compress(_data: &[u8], _level: u32) -> io::Result<Cow<[u8]>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     #[cfg_attr(miri, ignore)]
     #[cfg(all(feature = "zlib", feature = "snappy", feature = "zstd", feature = "lz4"))]
     fn check_all_compressions() {
         use CompressionType::*;
+
+        use super::*;
 
         let data = "hello world this is my string!!!";
         for ctype in [None, Zlib, Snappy, Zstd, Lz4] {

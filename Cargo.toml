@@ -21,7 +21,7 @@ zstd = { version = "0.5.1", optional = true }
 quickcheck = "0.9"
 
 [features]
-default = ["tempfile", "zlib", "snappy", "zstd", "lz4"]
+default = ["tempfile", "snappy"]
 snappy = ["snap"]
 zlib = ["flate2"]
 lz4 = ["lz4_flex"]
