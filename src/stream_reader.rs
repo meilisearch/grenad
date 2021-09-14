@@ -3,7 +3,7 @@ use std::mem;
 
 use byteorder::ReadBytesExt;
 
-use crate::block_reader::BlockReader;
+use crate::block::Block;
 use crate::compression::CompressionType;
 use crate::Error;
 
@@ -12,7 +12,7 @@ use crate::Error;
 pub struct StreamReader<R> {
     compression_type: CompressionType,
     reader: R,
-    current_block: Option<BlockReader>,
+    current_block: Option<Block>,
 }
 
 impl<R: io::Read> StreamReader<R> {
@@ -27,32 +27,33 @@ impl<R: io::Read> StreamReader<R> {
             Some(compression_type) => compression_type,
             None => return Err(Error::InvalidCompressionType),
         };
-        let current_block = BlockReader::new(&mut reader, compression_type)?;
+        let current_block = Block::new(&mut reader, compression_type)?;
         Ok(StreamReader { compression_type, reader, current_block })
     }
 
     /// Yields the entries in key-order.
     pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
-        match &mut self.current_block {
-            Some(block) => {
-                match block.next() {
-                    Some((key, val)) => {
-                        // This is a trick to make the compiler happy...
-                        // https://github.com/rust-lang/rust/issues/47680
-                        let key: &'static _ = unsafe { mem::transmute(key) };
-                        let val: &'static _ = unsafe { mem::transmute(val) };
-                        Ok(Some((key, val)))
-                    }
-                    None => {
-                        if !block.read_from(&mut self.reader)? {
-                            return Ok(None);
-                        }
-                        Ok(block.next())
-                    }
-                }
-            }
-            None => Ok(None),
-        }
+        // match &mut self.current_block {
+        //     Some(block) => {
+        //         match block.next() {
+        //             Some((key, val)) => {
+        //                 // This is a trick to make the compiler happy...
+        //                 // https://github.com/rust-lang/rust/issues/47680
+        //                 let key: &'static _ = unsafe { mem::transmute(key) };
+        //                 let val: &'static _ = unsafe { mem::transmute(val) };
+        //                 Ok(Some((key, val)))
+        //             }
+        //             None => {
+        //                 if !block.read_from(&mut self.reader)? {
+        //                     return Ok(None);
+        //                 }
+        //                 Ok(block.next())
+        //             }
+        //         }
+        //     }
+        //     None => Ok(None),
+        // }
+        todo!()
     }
 }
 
@@ -64,9 +65,10 @@ impl<R> StreamReader<R> {
 
     /// Returns the value currently pointed by the [`BlockReader`].
     pub(crate) fn current(&self) -> Option<(&[u8], &[u8])> {
-        let b = self.current_block.as_ref()?;
-        let (key, value, _offset) = b.current()?;
-        Some((key, value))
+        // let b = self.current_block.as_ref()?;
+        // let (key, value, _offset) = b.current()?;
+        // Some((key, value))
+        todo!()
     }
 
     /// Consumes the [`StreamReader`] and returns the underlying [`io::Read`] type.

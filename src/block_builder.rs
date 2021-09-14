@@ -97,8 +97,6 @@ impl BlockBuilder {
         self.buffer.extend(self.index_offsets.iter().map(|off| off.to_be_bytes()).flatten());
         self.buffer.extend_from_slice(&index_offsets_count.to_be_bytes());
 
-        dbg!(index_offsets_count);
-
         BlockBuffer { block_builder: self }
     }
 }

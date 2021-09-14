@@ -5,8 +5,8 @@
 #[macro_use]
 extern crate quickcheck;
 
+mod block;
 mod block_builder;
-mod block_reader;
 mod compression;
 mod error;
 mod sorter;
