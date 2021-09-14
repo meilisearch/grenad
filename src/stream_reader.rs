@@ -1,11 +1,10 @@
-use std::borrow::Cow;
 use std::io::{self, ErrorKind};
 use std::mem;
 
-use byteorder::{BigEndian, ReadBytesExt};
+use byteorder::ReadBytesExt;
 
-use crate::compression::{decompress, CompressionType};
-use crate::varint::varint_decode32;
+use crate::block_reader::BlockReader;
+use crate::compression::CompressionType;
 use crate::Error;
 
 /// A struct that is able to read a grenad file that has been created by a [`crate::StreamWriter`].
@@ -66,8 +65,7 @@ impl<R> StreamReader<R> {
     /// Returns the value currently pointed by the [`BlockReader`].
     pub(crate) fn current(&self) -> Option<(&[u8], &[u8])> {
         let b = self.current_block.as_ref()?;
-        let offset = b.current_offset?;
-        let (key, value, _offset) = BlockReader::current(&b.buffer, offset)?;
+        let (key, value, _offset) = b.current()?;
         Some((key, value))
     }
 
@@ -77,97 +75,6 @@ impl<R> StreamReader<R> {
     /// you must seek it back to the front to be read from the start.
     pub fn into_inner(self) -> R {
         self.reader
-    }
-}
-
-#[derive(Clone)]
-struct BlockReader {
-    compression_type: CompressionType,
-    buffer: Vec<u8>,
-    current_offset: Option<usize>,
-    next_offset: usize,
-}
-
-impl BlockReader {
-    fn new<R: io::Read>(
-        reader: &mut R,
-        _type: CompressionType,
-    ) -> Result<Option<BlockReader>, Error> {
-        let mut block_reader = BlockReader {
-            compression_type: _type,
-            buffer: Vec::new(),
-            current_offset: None,
-            next_offset: 0,
-        };
-
-        if block_reader.read_from(reader)? {
-            Ok(Some(block_reader))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Returns `true` if it was able to read a new BlockReader.
-    fn read_from<R: io::Read>(&mut self, reader: &mut R) -> Result<bool, Error> {
-        let block_len = match reader.read_u64::<BigEndian>() {
-            Ok(block_len) => block_len,
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(false),
-            Err(e) => return Err(Error::from(e)),
-        };
-
-        // We reset the cursor's position and decompress
-        // the block into the cursor's buffer.
-        self.current_offset = None;
-        self.next_offset = 0;
-        self.buffer.resize(block_len as usize, 0);
-        reader.read_exact(&mut self.buffer)?;
-
-        if let Cow::Owned(vec) = decompress(self.compression_type, &self.buffer)? {
-            self.buffer = vec;
-        }
-
-        Ok(true)
-    }
-
-    /// Returns the current key-value pair and the amount
-    /// of bytes to advance to read the next one.
-    fn current(buffer: &[u8], start_offset: usize) -> Option<(&[u8], &[u8], usize)> {
-        if buffer.len() == start_offset {
-            return None;
-        }
-
-        let mut offset = start_offset;
-
-        // Read the key length.
-        let mut key_len = 0;
-        let len = varint_decode32(&buffer[offset..], &mut key_len);
-        offset += len;
-
-        // Read the value length.
-        let mut val_len = 0;
-        let len = varint_decode32(&buffer[offset..], &mut val_len);
-        offset += len;
-
-        // Read the key itself.
-        let key = &buffer[offset..offset + key_len as usize];
-        offset += key_len as usize;
-
-        // Read the value itself.
-        let val = &buffer[offset..offset + val_len as usize];
-        offset += val_len as usize;
-
-        Some((key, val, offset - start_offset))
-    }
-
-    fn next(&mut self) -> Option<(&[u8], &[u8])> {
-        match Self::current(&self.buffer, self.next_offset) {
-            Some((key, value, offset)) => {
-                self.current_offset = Some(self.next_offset);
-                self.next_offset += offset;
-                Some((key, value))
-            }
-            None => None,
-        }
     }
 }
 
