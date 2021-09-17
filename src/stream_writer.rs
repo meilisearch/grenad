@@ -4,16 +4,17 @@ use std::{cmp, io};
 
 use byteorder::{BigEndian, WriteBytesExt};
 
-use crate::block_builder::{BlockBuilder, DEFAULT_BLOCK_SIZE, DEFAULT_RESTART_INTERVAL};
+use crate::block_writer::BlockWriter;
 use crate::compression::{compress, CompressionType};
 
+pub const DEFAULT_BLOCK_SIZE: usize = 8192;
 pub const MIN_BLOCK_SIZE: usize = 1024;
 
 /// A struct that is used to configure a [`StreamWriter`].
 pub struct StreamWriterBuilder {
     compression_type: CompressionType,
     compression_level: u32,
-    block_restart_interval: NonZeroUsize,
+    index_key_interval: Option<NonZeroUsize>,
     block_size: usize,
 }
 
@@ -22,7 +23,7 @@ impl Default for StreamWriterBuilder {
         StreamWriterBuilder {
             compression_type: CompressionType::None,
             compression_level: 0,
-            block_restart_interval: DEFAULT_RESTART_INTERVAL,
+            index_key_interval: None,
             block_size: DEFAULT_BLOCK_SIZE,
         }
     }
@@ -57,9 +58,10 @@ impl StreamWriterBuilder {
         self
     }
 
-    /// Defines the interval at which we will add keys into the footer index.
-    pub fn block_restart_interval(&mut self, size: NonZeroUsize) -> &mut Self {
-        self.block_restart_interval = size;
+    /// The interval at which we store the index of a key in the
+    /// footer index, used to seek into a block.
+    pub fn index_key_interval(&mut self, interval: NonZeroUsize) -> &mut Self {
+        self.index_key_interval = Some(interval);
         self
     }
 
@@ -69,8 +71,13 @@ impl StreamWriterBuilder {
         // TODO write a magic number too.
         writer.write_u8(self.compression_type as u8)?;
 
+        let mut bwb = BlockWriter::builder();
+        if let Some(interval) = self.index_key_interval {
+            bwb.index_key_interval(interval);
+        }
+
         Ok(StreamWriter {
-            block_builder: BlockBuilder::new(self.block_restart_interval),
+            block_writer: bwb.build(),
             compression_type: self.compression_type,
             compression_level: self.compression_level,
             block_size: self.block_size,
@@ -87,7 +94,7 @@ impl StreamWriterBuilder {
 /// A struct you can use to write entries into any [`io::Write`] type,
 /// entries must be inserted in key-order.
 pub struct StreamWriter<W> {
-    block_builder: BlockBuilder,
+    block_writer: BlockWriter,
     compression_type: CompressionType,
     compression_level: u32,
     block_size: usize,
@@ -121,9 +128,9 @@ impl<W: io::Write> StreamWriter<W> {
         A: AsRef<[u8]>,
         B: AsRef<[u8]>,
     {
-        self.block_builder.insert(key.as_ref(), val.as_ref());
-        if self.block_builder.current_size_estimate() >= self.block_size {
-            let buffer = self.block_builder.finish();
+        self.block_writer.insert(key.as_ref(), val.as_ref());
+        if self.block_writer.current_size_estimate() >= self.block_size {
+            let buffer = self.block_writer.finish();
 
             // Compress, write the compressed block length then the compressed block itself.
             let buffer = compress(self.compression_type, self.compression_level, buffer.as_ref())?;
@@ -145,8 +152,8 @@ impl<W: io::Write> StreamWriter<W> {
     ///
     /// Returns the underlying [`io::Write`] provided type.
     pub fn into_inner(mut self) -> io::Result<W> {
-        if !self.block_builder.is_empty() {
-            let buffer = self.block_builder.finish();
+        if !self.block_writer.is_empty() {
+            let buffer = self.block_writer.finish();
             let buffer = buffer.as_ref();
 
             // Compress, write the compressed block length then the compressed block itself.

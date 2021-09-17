@@ -6,7 +6,7 @@
 extern crate quickcheck;
 
 mod block;
-mod block_builder;
+mod block_writer;
 mod compression;
 mod error;
 mod sorter;

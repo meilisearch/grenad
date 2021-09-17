@@ -304,11 +304,11 @@ impl<'b> Iterator for BlockRevIter<'b> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::block_builder::{BlockBuilder, DEFAULT_RESTART_INTERVAL};
+    use crate::block_writer::BlockWriter;
 
     #[test]
     fn easy_iter() {
-        let mut bb = BlockBuilder::new(DEFAULT_RESTART_INTERVAL);
+        let mut bb = BlockWriter::new();
 
         for x in 0..2000i32 {
             let x = x.to_be_bytes();
@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn easy_rev_iter() {
-        let mut bb = BlockBuilder::new(DEFAULT_RESTART_INTERVAL);
+        let mut bb = BlockWriter::new();
 
         for x in 0..2000i32 {
             let x = x.to_be_bytes();
@@ -352,7 +352,7 @@ mod tests {
 
     #[test]
     fn easy_move_on_key_greater_than_or_equal() {
-        let mut bb = BlockBuilder::new(DEFAULT_RESTART_INTERVAL);
+        let mut bb = BlockWriter::new();
         let mut nums = Vec::new();
         for x in (10..2000i32).step_by(3) {
             nums.push(x);
@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn easy_move_on_key_lower_than_or_equal() {
-        let mut bb = BlockBuilder::new(DEFAULT_RESTART_INTERVAL);
+        let mut bb = BlockWriter::new();
         let mut nums = Vec::new();
         for x in (10..2000i32).step_by(3) {
             nums.push(x);

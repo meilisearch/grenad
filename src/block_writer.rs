@@ -5,15 +5,48 @@ use std::ops::Deref;
 
 use crate::varint::varint_encode32;
 
-pub const DEFAULT_BLOCK_SIZE: usize = 8192;
-pub const DEFAULT_RESTART_INTERVAL: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(8) };
+const DEFAULT_INDEX_KEY_INTERVAL: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(8) };
 
-/// a `BlockBuilder` generates blocks where keys and values are one after the other.
+#[derive(Debug, Copy, Clone)]
+pub struct BlockWriterBuilder {
+    index_key_interval: NonZeroUsize,
+}
+
+impl BlockWriterBuilder {
+    pub fn new() -> BlockWriterBuilder {
+        BlockWriterBuilder { index_key_interval: DEFAULT_INDEX_KEY_INTERVAL }
+    }
+
+    /// The interval at which we store the index of a key in the
+    /// footer index, used to seek into the block.
+    pub fn index_key_interval(&mut self, interval: NonZeroUsize) -> &mut Self {
+        self.index_key_interval = interval;
+        self
+    }
+
+    pub fn build(&self) -> BlockWriter {
+        BlockWriter {
+            buffer: Vec::new(),
+            last_key: None,
+            index_key_interval: self.index_key_interval,
+            index_offsets: vec![0],
+            index_key_counter: 0,
+        }
+    }
+}
+
+impl Default for BlockWriterBuilder {
+    fn default() -> BlockWriterBuilder {
+        BlockWriterBuilder::new()
+    }
+}
+
+/// A `BlockWriter` generates blocks where keys and values are one after the other.
 ///
 /// The key values are appended one after the other in the block, these entries are
 /// followed by an index that indicates the offset of some of the keys. This footer
 /// index stores an offset every `index_key_interval`.
-pub struct BlockBuilder {
+pub struct BlockWriter {
     /// The buffer in which we store the indexed bytes.
     /// It contains the key, values and the footer index.
     buffer: Vec<u8>,
@@ -31,15 +64,13 @@ pub struct BlockBuilder {
     index_key_counter: usize,
 }
 
-impl BlockBuilder {
-    pub fn new(index_key_interval: NonZeroUsize) -> BlockBuilder {
-        BlockBuilder {
-            buffer: Vec::new(),
-            last_key: None,
-            index_key_interval,
-            index_offsets: vec![0],
-            index_key_counter: 0,
-        }
+impl BlockWriter {
+    pub fn new() -> BlockWriter {
+        BlockWriterBuilder::new().build()
+    }
+
+    pub fn builder() -> BlockWriterBuilder {
+        BlockWriterBuilder::new()
     }
 
     pub fn reset(&mut self) {
@@ -101,15 +132,21 @@ impl BlockBuilder {
     }
 }
 
-/// A type that represents the finished content of a `BlockBuilder`.
+impl Default for BlockWriter {
+    fn default() -> BlockWriter {
+        BlockWriter::new()
+    }
+}
+
+/// A type that represents the finished content of a `BlockWriter`.
 ///
 /// This type implements `Deref` which exposes useful methods.
 pub struct BlockBuffer<'a> {
-    block_builder: &'a mut BlockBuilder,
+    block_builder: &'a mut BlockWriter,
 }
 
 impl Deref for BlockBuffer<'_> {
-    type Target = BlockBuilder;
+    type Target = BlockWriter;
 
     fn deref(&self) -> &Self::Target {
         &self.block_builder
@@ -134,7 +171,7 @@ mod tests {
 
     #[test]
     fn easy_block() {
-        let mut bb = BlockBuilder::new(DEFAULT_RESTART_INTERVAL);
+        let mut bb = BlockWriter::new();
 
         for x in 0..2000i32 {
             let x = x.to_be_bytes();
