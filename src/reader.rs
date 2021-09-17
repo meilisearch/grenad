@@ -3,7 +3,7 @@ use std::mem;
 
 use byteorder::ReadBytesExt;
 
-use crate::block::Block;
+use crate::block::{Block, BlockCursor};
 use crate::compression::CompressionType;
 use crate::Error;
 
@@ -12,7 +12,8 @@ use crate::Error;
 pub struct Reader<R> {
     compression_type: CompressionType,
     reader: R,
-    current_block: Option<Block>,
+    current_cursor: Option<BlockCursor<Block>>,
+    move_on_first: bool,
 }
 
 impl<R: io::Read> Reader<R> {
@@ -27,33 +28,44 @@ impl<R: io::Read> Reader<R> {
             Some(compression_type) => compression_type,
             None => return Err(Error::InvalidCompressionType),
         };
-        let current_block = Block::new(&mut reader, compression_type)?;
-        Ok(Reader { compression_type, reader, current_block })
+        let current_cursor = Block::new(&mut reader, compression_type)?.map(BlockCursor::new);
+        Ok(Reader { compression_type, reader, current_cursor, move_on_first: true })
     }
 
     /// Yields the entries in key-order.
     pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
-        // match &mut self.current_block {
-        //     Some(block) => {
-        //         match block.next() {
-        //             Some((key, val)) => {
-        //                 // This is a trick to make the compiler happy...
-        //                 // https://github.com/rust-lang/rust/issues/47680
-        //                 let key: &'static _ = unsafe { mem::transmute(key) };
-        //                 let val: &'static _ = unsafe { mem::transmute(val) };
-        //                 Ok(Some((key, val)))
-        //             }
-        //             None => {
-        //                 if !block.read_from(&mut self.reader)? {
-        //                     return Ok(None);
-        //                 }
-        //                 Ok(block.next())
-        //             }
-        //         }
-        //     }
-        //     None => Ok(None),
-        // }
-        todo!()
+        match &mut self.current_cursor {
+            Some(cursor) => {
+                let result = if self.move_on_first {
+                    self.move_on_first = false;
+                    cursor.move_on_first()
+                } else {
+                    cursor.move_on_next()
+                };
+
+                match result {
+                    Some((key, val)) => {
+                        // This is a trick to make the compiler happy...
+                        // https://github.com/rust-lang/rust/issues/47680
+                        let key: &'static _ = unsafe { mem::transmute(key) };
+                        let val: &'static _ = unsafe { mem::transmute(val) };
+                        Ok(Some((key, val)))
+                    }
+                    None => {
+                        let cursor = self.current_cursor.take().unwrap();
+                        let mut block = cursor.into_inner();
+                        if block.read_from(&mut self.reader)? {
+                            self.current_cursor = Some(BlockCursor::new(block));
+                            self.move_on_first = true;
+                            self.next()
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                }
+            }
+            None => Ok(None),
+        }
     }
 }
 
@@ -65,10 +77,7 @@ impl<R> Reader<R> {
 
     /// Returns the value currently pointed by the [`BlockReader`].
     pub(crate) fn current(&self) -> Option<(&[u8], &[u8])> {
-        // let b = self.current_block.as_ref()?;
-        // let (key, value, _offset) = b.current()?;
-        // Some((key, value))
-        todo!()
+        self.current_cursor.as_ref().and_then(BlockCursor::current)
     }
 
     /// Consumes the [`Reader`] and returns the underlying [`io::Read`] type.

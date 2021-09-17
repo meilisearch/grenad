@@ -1,7 +1,7 @@
-use std::borrow::Cow;
+use std::borrow::{Borrow, Cow};
 use std::convert::TryInto;
 use std::io::{self, ErrorKind};
-use std::mem::size_of;
+use std::mem::{self, size_of};
 
 use byteorder::{BigEndian, ReadBytesExt};
 
@@ -123,32 +123,39 @@ impl Block {
 }
 
 #[derive(Clone)]
-pub struct BlockCursor<'b> {
-    block: &'b Block,
+pub struct BlockCursor<B> {
+    block: B,
     current_offset: Option<usize>,
 }
 
-impl<'b> BlockCursor<'b> {
-    pub fn new(block: &'b Block) -> BlockCursor<'b> {
+impl<B> BlockCursor<B> {
+    pub fn new(block: B) -> BlockCursor<B> {
         BlockCursor { block, current_offset: None }
     }
 
+    pub fn into_inner(self) -> B {
+        self.block
+    }
+}
+
+impl<B: Borrow<Block>> BlockCursor<B> {
     /// Returns the currently pointed key/value or `None` if the cursor hasn't been seeked yet.
-    pub fn current(&self) -> Option<(&'b [u8], &'b [u8])> {
-        self.current_offset.and_then(|off| self.block.entry_at(off).map(|(k, v, _)| (k, v)))
+    pub fn current(&self) -> Option<(&[u8], &[u8])> {
+        self.current_offset
+            .and_then(|off| self.block.borrow().entry_at(off).map(|(k, v, _)| (k, v)))
     }
 
     /// Moves the cursor on the first key/value and returns the pair.
-    pub fn move_on_first(&mut self) -> Option<(&'b [u8], &'b [u8])> {
-        self.current_offset = self.block.index_offsets().first().map(|off| *off as usize);
+    pub fn move_on_first(&mut self) -> Option<(&[u8], &[u8])> {
+        self.current_offset = self.block.borrow().index_offsets().first().map(|off| *off as usize);
         self.current()
     }
 
     /// Moves the cursor on the last key/value and returns the pair.
-    pub fn move_on_last(&mut self) -> Option<(&'b [u8], &'b [u8])> {
-        match self.block.index_offsets().last().map(|off| *off as usize) {
+    pub fn move_on_last(&mut self) -> Option<(&[u8], &[u8])> {
+        match self.block.borrow().index_offsets().last().map(|off| *off as usize) {
             Some(mut off) => {
-                while let Some((_, _, next)) = self.block.entry_at(off) {
+                while let Some((_, _, next)) = self.block.borrow().entry_at(off) {
                     // We store the current offset as the valid last offset seen.
                     self.current_offset = Some(off);
                     off = next;
@@ -160,8 +167,8 @@ impl<'b> BlockCursor<'b> {
     }
 
     /// Moves the cursor on the key following the currently pointed key.
-    pub fn move_on_next(&mut self) -> Option<(&'b [u8], &'b [u8])> {
-        match self.current_offset.and_then(|off| self.block.entry_at(off)) {
+    pub fn move_on_next(&mut self) -> Option<(&[u8], &[u8])> {
+        match self.current_offset.and_then(|off| self.block.borrow().entry_at(off)) {
             Some((_, _, next)) => {
                 self.current_offset = Some(next);
                 self.current()
@@ -171,10 +178,10 @@ impl<'b> BlockCursor<'b> {
     }
 
     /// Moves the cursor on the key preceding the currently pointed key.
-    pub fn move_on_prev(&mut self) -> Option<(&'b [u8], &'b [u8])> {
+    pub fn move_on_prev(&mut self) -> Option<(&[u8], &[u8])> {
         match self.current_offset {
             Some(current_offset) => {
-                let offsets = self.block.index_offsets();
+                let offsets = self.block.borrow().index_offsets();
                 // We go to the previous offset corresponding to the current pointed key.
                 let i = offsets
                     .binary_search(&(current_offset as u32))
@@ -183,13 +190,14 @@ impl<'b> BlockCursor<'b> {
 
                 // We retrieve the currently pointed key to compare it
                 // with the key we are searching for.
-                let current_key = self.block.entry_at(current_offset).map(|(k, _, _)| k)?;
+                let current_key =
+                    self.block.borrow().entry_at(current_offset).map(|(k, _, _)| k)?;
 
                 // We use the offset found in the index that is just before
                 // the one this key is in to iterate until we find the current key,
                 // we stop searching and return the key just before the current one.
                 let mut off = offsets[i] as usize;
-                while let Some((k, _, next)) = self.block.entry_at(off) {
+                while let Some((k, _, next)) = self.block.borrow().entry_at(off) {
                     if current_key == k {
                         // We can stop as we found the key we were pointing at,
                         // we want the one just before.
@@ -207,13 +215,10 @@ impl<'b> BlockCursor<'b> {
     }
 
     /// Moves the cursor on the key lower than or equal to the given key in this block.
-    pub fn move_on_key_lower_than_or_equal_to(
-        &mut self,
-        key: &[u8],
-    ) -> Option<(&'b [u8], &'b [u8])> {
-        let offsets = self.block.index_offsets();
+    pub fn move_on_key_lower_than_or_equal_to(&mut self, key: &[u8]) -> Option<(&[u8], &[u8])> {
+        let offsets = self.block.borrow().index_offsets();
         let result = offsets.binary_search_by_key(&key, |off| {
-            let (key, _, _) = self.block.entry_at(*off as usize).unwrap();
+            let (key, _, _) = self.block.borrow().entry_at(*off as usize).unwrap();
             &key
         });
 
@@ -223,7 +228,7 @@ impl<'b> BlockCursor<'b> {
                 Some(off) => {
                     self.current_offset = None;
                     let mut off = *off as usize;
-                    while let Some((k, _, next)) = self.block.entry_at(off) {
+                    while let Some((k, _, next)) = self.block.borrow().entry_at(off) {
                         if k > key {
                             break;
                         }
@@ -239,12 +244,15 @@ impl<'b> BlockCursor<'b> {
     }
 
     /// Moves the cursor on the key greater than or equal to the given key in this block.
-    pub fn move_on_key_greater_than_or_equal_to(
-        &mut self,
-        key: &[u8],
-    ) -> Option<(&'b [u8], &'b [u8])> {
+    pub fn move_on_key_greater_than_or_equal_to(&mut self, key: &[u8]) -> Option<(&[u8], &[u8])> {
         match self.move_on_key_lower_than_or_equal_to(key) {
-            Some((k, v)) if k == key => Some((k, v)),
+            Some((k, v)) if k == key => {
+                // This is a trick to make the compiler happy...
+                // https://github.com/rust-lang/rust/issues/47680
+                let k: &'static _ = unsafe { mem::transmute(k) };
+                let v: &'static _ = unsafe { mem::transmute(v) };
+                Some((k, v))
+            }
             Some(_) => self.move_on_next(),
             None => self.move_on_first(),
         }
@@ -253,7 +261,7 @@ impl<'b> BlockCursor<'b> {
 
 #[derive(Clone)]
 pub struct BlockIter<'b> {
-    cursor: BlockCursor<'b>,
+    cursor: BlockCursor<&'b Block>,
     move_on_first: bool,
 }
 
@@ -261,12 +269,8 @@ impl<'b> BlockIter<'b> {
     pub fn new(block: &'b Block) -> BlockIter<'b> {
         BlockIter { cursor: BlockCursor::new(block), move_on_first: true }
     }
-}
 
-impl<'b> Iterator for BlockIter<'b> {
-    type Item = (&'b [u8], &'b [u8]);
-
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<(&[u8], &[u8])> {
         if self.move_on_first {
             self.move_on_first = false;
             self.cursor.move_on_first()
@@ -278,7 +282,7 @@ impl<'b> Iterator for BlockIter<'b> {
 
 #[derive(Clone)]
 pub struct BlockRevIter<'b> {
-    cursor: BlockCursor<'b>,
+    cursor: BlockCursor<&'b Block>,
     move_on_last: bool,
 }
 
@@ -286,12 +290,8 @@ impl<'b> BlockRevIter<'b> {
     pub fn new(block: &'b Block) -> BlockRevIter<'b> {
         BlockRevIter { cursor: BlockCursor::new(block), move_on_last: true }
     }
-}
 
-impl<'b> Iterator for BlockRevIter<'b> {
-    type Item = (&'b [u8], &'b [u8]);
-
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<(&[u8], &[u8])> {
         if self.move_on_last {
             self.move_on_last = false;
             self.cursor.move_on_last()
@@ -320,7 +320,9 @@ mod tests {
         final_buffer.extend_from_slice(buffer.as_ref());
 
         let block = Block::new(&mut &final_buffer[..], CompressionType::None).unwrap().unwrap();
-        for ((k, v), n) in BlockIter::new(&block).zip(0..2000i32) {
+        let mut iter = BlockIter::new(&block);
+        for n in 0..2000i32 {
+            let (k, v) = iter.next().unwrap();
             let k = k.try_into().map(i32::from_be_bytes).unwrap();
             let v = v.try_into().map(i32::from_be_bytes).unwrap();
             assert_eq!(k, n);
@@ -342,7 +344,9 @@ mod tests {
         final_buffer.extend_from_slice(buffer.as_ref());
 
         let block = Block::new(&mut &final_buffer[..], CompressionType::None).unwrap().unwrap();
-        for ((k, v), n) in BlockRevIter::new(&block).zip((0..2000i32).rev()) {
+        let mut iter = BlockRevIter::new(&block);
+        for n in (0..2000i32).rev() {
+            let (k, v) = iter.next().unwrap();
             let k = k.try_into().map(i32::from_be_bytes).unwrap();
             let v = v.try_into().map(i32::from_be_bytes).unwrap();
             assert_eq!(k, n);
