@@ -7,17 +7,17 @@ use crate::block::Block;
 use crate::compression::CompressionType;
 use crate::Error;
 
-/// A struct that is able to read a grenad file that has been created by a [`crate::StreamWriter`].
+/// A struct that is able to read a grenad file that has been created by a [`crate::Writer`].
 #[derive(Clone)]
-pub struct StreamReader<R> {
+pub struct Reader<R> {
     compression_type: CompressionType,
     reader: R,
     current_block: Option<Block>,
 }
 
-impl<R: io::Read> StreamReader<R> {
-    /// Creates a [`StreamReader`] that will read from the provided [`io::Read`] type.
-    pub fn new(mut reader: R) -> Result<StreamReader<R>, Error> {
+impl<R: io::Read> Reader<R> {
+    /// Creates a [`Reader`] that will read from the provided [`io::Read`] type.
+    pub fn new(mut reader: R) -> Result<Reader<R>, Error> {
         let compression = match reader.read_u8() {
             Ok(compression) => compression,
             Err(e) if e.kind() == ErrorKind::UnexpectedEof => CompressionType::None as u8,
@@ -28,7 +28,7 @@ impl<R: io::Read> StreamReader<R> {
             None => return Err(Error::InvalidCompressionType),
         };
         let current_block = Block::new(&mut reader, compression_type)?;
-        Ok(StreamReader { compression_type, reader, current_block })
+        Ok(Reader { compression_type, reader, current_block })
     }
 
     /// Yields the entries in key-order.
@@ -57,7 +57,7 @@ impl<R: io::Read> StreamReader<R> {
     }
 }
 
-impl<R> StreamReader<R> {
+impl<R> Reader<R> {
     /// Returns the [`CompressionType`] used by the underlying [`io::Read`] type.
     pub fn compression_type(&self) -> CompressionType {
         self.compression_type
@@ -71,7 +71,7 @@ impl<R> StreamReader<R> {
         todo!()
     }
 
-    /// Consumes the [`StreamReader`] and returns the underlying [`io::Read`] type.
+    /// Consumes the [`Reader`] and returns the underlying [`io::Read`] type.
     ///
     /// The returned [`io::Read`] type has been [`io::Seek`]ed which means that
     /// you must seek it back to the front to be read from the start.
@@ -83,11 +83,11 @@ impl<R> StreamReader<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stream_writer::StreamWriter;
+    use crate::writer::Writer;
 
     #[test]
     fn no_compression() {
-        let wb = StreamWriter::builder();
+        let wb = Writer::builder();
         let mut writer = wb.build(Vec::new()).unwrap();
 
         for x in 0..2000u32 {
@@ -98,7 +98,7 @@ mod tests {
         let bytes = writer.into_inner().unwrap();
         assert_ne!(bytes.len(), 0);
 
-        let mut reader = StreamReader::new(bytes.as_slice()).unwrap();
+        let mut reader = Reader::new(bytes.as_slice()).unwrap();
         let mut x: u32 = 0;
 
         while let Some((k, v)) = reader.next().unwrap() {
@@ -112,14 +112,14 @@ mod tests {
 
     #[test]
     fn empty() {
-        let mut reader = StreamReader::new(&[][..]).unwrap();
+        let mut reader = Reader::new(&[][..]).unwrap();
         assert_eq!(reader.next().unwrap(), None);
     }
 
     #[cfg(feature = "snappy")]
     #[test]
     fn snappy_compression() {
-        let mut wb = StreamWriter::builder();
+        let mut wb = Writer::builder();
         wb.compression_type(CompressionType::Snappy);
         let mut writer = wb.build(Vec::new()).unwrap();
 
@@ -131,7 +131,7 @@ mod tests {
         let bytes = writer.into_inner().unwrap();
         assert_ne!(bytes.len(), 0);
 
-        let mut reader = StreamReader::new(bytes.as_slice()).unwrap();
+        let mut reader = Reader::new(bytes.as_slice()).unwrap();
         let mut x: u32 = 0;
 
         while let Some((k, v)) = reader.next().unwrap() {

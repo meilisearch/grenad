@@ -50,12 +50,12 @@ fn wrapping_sum_u32s<'a>(
  values: &[Cow<'a, [u8]>],
 ) -> Result<Cow<'a, [u8]>, TryFromSliceError>
 {
-    let mut output: u32 = 0;
-    for bytes in values.iter().map(AsRef::as_ref) {
-        let num = bytes.try_into().map(u32::from_ne_bytes)?;
-        output = output.wrapping_add(num);
-    }
-    Ok(Cow::Owned(output.to_ne_bytes().to_vec()))
+ let mut output: u32 = 0;
+ for bytes in values.iter().map(AsRef::as_ref) {
+     let num = bytes.try_into().map(u32::from_ne_bytes)?;
+     output = output.wrapping_add(num);
+ }
+ Ok(Cow::Owned(output.to_ne_bytes().to_vec()))
 }
 
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -117,12 +117,12 @@ fn wrapping_sum_u32s<'a>(
  values: &[Cow<'a, [u8]>],
 ) -> Result<Cow<'a, [u8]>, TryFromSliceError>
 {
-    let mut output: u32 = 0;
-    for bytes in values.iter().map(AsRef::as_ref) {
-        let num = bytes.try_into().map(u32::from_ne_bytes)?;
-        output = output.wrapping_add(num);
-    }
-    Ok(Cow::Owned(output.to_ne_bytes().to_vec()))
+ let mut output: u32 = 0;
+ for bytes in values.iter().map(AsRef::as_ref) {
+     let num = bytes.try_into().map(u32::from_ne_bytes)?;
+     output = output.wrapping_add(num);
+ }
+ Ok(Cow::Owned(output.to_ne_bytes().to_vec()))
 }
 
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
