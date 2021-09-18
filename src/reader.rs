@@ -13,7 +13,6 @@ pub struct Reader<R> {
     compression_type: CompressionType,
     reader: R,
     current_cursor: Option<BlockCursor<Block>>,
-    move_on_first: bool,
 }
 
 impl<R: io::Read> Reader<R> {
@@ -29,21 +28,14 @@ impl<R: io::Read> Reader<R> {
             None => return Err(Error::InvalidCompressionType),
         };
         let current_cursor = Block::new(&mut reader, compression_type)?.map(BlockCursor::new);
-        Ok(Reader { compression_type, reader, current_cursor, move_on_first: true })
+        Ok(Reader { compression_type, reader, current_cursor })
     }
 
     /// Yields the entries in key-order.
     pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
         match &mut self.current_cursor {
             Some(cursor) => {
-                let result = if self.move_on_first {
-                    self.move_on_first = false;
-                    cursor.move_on_first()
-                } else {
-                    cursor.move_on_next()
-                };
-
-                match result {
+                match cursor.move_on_next() {
                     Some((key, val)) => {
                         // This is a trick to make the compiler happy...
                         // https://github.com/rust-lang/rust/issues/47680
@@ -56,7 +48,6 @@ impl<R: io::Read> Reader<R> {
                         let mut block = cursor.into_inner();
                         if block.read_from(&mut self.reader)? {
                             self.current_cursor = Some(BlockCursor::new(block));
-                            self.move_on_first = true;
                             self.next()
                         } else {
                             Ok(None)

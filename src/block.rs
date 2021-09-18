@@ -167,17 +167,22 @@ impl<B: Borrow<Block>> BlockCursor<B> {
     }
 
     /// Moves the cursor on the key following the currently pointed key.
+    ///
+    /// Automatically moves on the first key if the cursor hasn't been initialized yet.
     pub fn move_on_next(&mut self) -> Option<(&[u8], &[u8])> {
-        match self.current_offset.and_then(|off| self.block.borrow().entry_at(off)) {
-            Some((_, _, next)) => {
+        match self.current_offset.map(|off| self.block.borrow().entry_at(off)) {
+            Some(Some((_, _, next))) => {
                 self.current_offset = Some(next);
                 self.current()
             }
-            None => None,
+            Some(None) => None,
+            None => self.move_on_first(),
         }
     }
 
     /// Moves the cursor on the key preceding the currently pointed key.
+    ///
+    /// Automatically moves on the last key if the cursor hasn't been initialized yet.
     pub fn move_on_prev(&mut self) -> Option<(&[u8], &[u8])> {
         match self.current_offset {
             Some(current_offset) => {
@@ -210,7 +215,7 @@ impl<B: Borrow<Block>> BlockCursor<B> {
 
                 self.current()
             }
-            None => None,
+            None => self.move_on_last(),
         }
     }
 
@@ -262,42 +267,30 @@ impl<B: Borrow<Block>> BlockCursor<B> {
 #[derive(Clone)]
 pub struct BlockIter<'b> {
     cursor: BlockCursor<&'b Block>,
-    move_on_first: bool,
 }
 
 impl<'b> BlockIter<'b> {
     pub fn new(block: &'b Block) -> BlockIter<'b> {
-        BlockIter { cursor: BlockCursor::new(block), move_on_first: true }
+        BlockIter { cursor: BlockCursor::new(block) }
     }
 
     fn next(&mut self) -> Option<(&[u8], &[u8])> {
-        if self.move_on_first {
-            self.move_on_first = false;
-            self.cursor.move_on_first()
-        } else {
-            self.cursor.move_on_next()
-        }
+        self.cursor.move_on_next()
     }
 }
 
 #[derive(Clone)]
 pub struct BlockRevIter<'b> {
     cursor: BlockCursor<&'b Block>,
-    move_on_last: bool,
 }
 
 impl<'b> BlockRevIter<'b> {
     pub fn new(block: &'b Block) -> BlockRevIter<'b> {
-        BlockRevIter { cursor: BlockCursor::new(block), move_on_last: true }
+        BlockRevIter { cursor: BlockCursor::new(block) }
     }
 
     fn next(&mut self) -> Option<(&[u8], &[u8])> {
-        if self.move_on_last {
-            self.move_on_last = false;
-            self.cursor.move_on_last()
-        } else {
-            self.cursor.move_on_prev()
-        }
+        self.cursor.move_on_prev()
     }
 }
 
