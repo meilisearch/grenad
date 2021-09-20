@@ -10,6 +10,8 @@ pub enum Error<U = Infallible> {
     Merge(U),
     /// An invalid [`crate::CompressionType`] has been encountered.
     InvalidCompressionType,
+    /// This grenad file format is invalid.
+    InvalidFormatVersion,
 }
 
 impl<U> Error<U> {
@@ -28,6 +30,7 @@ impl<U: fmt::Display> fmt::Display for Error<U> {
             Error::Io(io) => write!(f, "{}", io),
             Error::Merge(e) => write!(f, "merge error: {}", e),
             Error::InvalidCompressionType => f.write_str("invalid compression type"),
+            Error::InvalidFormatVersion => f.write_str("invalid format version"),
         }
     }
 }

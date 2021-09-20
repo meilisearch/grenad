@@ -10,6 +10,7 @@ mod block_writer;
 mod compression;
 mod error;
 mod merger;
+mod metadata;
 mod reader;
 mod sorter;
 mod varint;
