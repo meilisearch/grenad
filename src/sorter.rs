@@ -361,7 +361,7 @@ where
         let mut writer = WriterBuilder::new()
             .compression_type(self.chunk_compression_type)
             .compression_level(self.chunk_compression_level)
-            .build(chunk)?;
+            .build(chunk);
 
         self.entries.sort_unstable_by_key();
 
@@ -399,7 +399,7 @@ where
         let mut writer = WriterBuilder::new()
             .compression_type(self.chunk_compression_type)
             .compression_level(self.chunk_compression_level)
-            .build(chunk)?;
+            .build(chunk);
 
         let sources: Result<Vec<_>, Error<U>> = self
             .chunks
@@ -518,6 +518,7 @@ impl ChunkCreator for CursorVec {
 #[cfg(test)]
 mod tests {
     use std::convert::Infallible;
+    use std::io::Cursor;
     use std::iter::repeat;
 
     use super::*;
@@ -542,7 +543,7 @@ mod tests {
         sorter.write_into_stream_writer(&mut bytes).unwrap();
         let bytes = bytes.into_inner().unwrap();
 
-        let mut reader = Reader::new(bytes.as_slice()).unwrap();
+        let mut reader = Reader::new(Cursor::new(bytes.as_slice())).unwrap();
         while let Some((key, val)) = reader.next().unwrap() {
             match key {
                 b"hello" => assert_eq!(val, b"kiki"),
@@ -573,7 +574,7 @@ mod tests {
         sorter.write_into_stream_writer(&mut bytes).unwrap();
         let bytes = bytes.into_inner().unwrap();
 
-        let mut reader = Reader::new(bytes.as_slice()).unwrap();
+        let mut reader = Reader::new(Cursor::new(bytes.as_slice())).unwrap();
         let (key, val) = reader.next().unwrap().unwrap();
         assert_eq!(key, b"hello");
         assert!(val.iter().eq(repeat(b"kiki").take(200).flatten()));

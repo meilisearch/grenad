@@ -89,6 +89,11 @@ impl BlockWriter {
         self.buffer.len() + self.index_offsets.len() * mem::size_of::<u32>() + mem::size_of::<u32>()
     }
 
+    /// Returns the last key inserted in this block.
+    pub fn last_key(&self) -> Option<&[u8]> {
+        self.last_key.as_ref().map(AsRef::as_ref)
+    }
+
     /// Insert a key that must be greater than the previously added one.
     pub fn insert(&mut self, key: &[u8], val: &[u8]) {
         debug_assert!(self.index_key_counter <= self.index_key_interval.get());

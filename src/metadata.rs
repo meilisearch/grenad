@@ -9,9 +9,11 @@ use crate::error::Error;
 const METADATA_SIZE: usize = 17;
 const MAGIC_V1: u32 = 0x76324D4C;
 
+/// The format version of this file.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Hash)]
 #[repr(u32)]
 pub enum FileVersion {
+    /// The first format version.
     FormatV1 = 0,
 }
 
@@ -20,7 +22,7 @@ pub struct Metadata {
     pub file_version: FileVersion,
     pub index_block_offset: u64,
     pub compression_type: CompressionType,
-    pub count_entries: u64,
+    pub entries_count: u64,
 }
 
 impl Metadata {
@@ -42,15 +44,15 @@ impl Metadata {
         let compression_type = reader.read_u8()?;
         let compression_type =
             CompressionType::from_u8(compression_type).ok_or(Error::InvalidCompressionType)?;
-        let count_entries = reader.read_u64::<LittleEndian>()?;
+        let entries_count = reader.read_u64::<LittleEndian>()?;
 
-        Ok(Metadata { file_version, index_block_offset, compression_type, count_entries })
+        Ok(Metadata { file_version, index_block_offset, compression_type, entries_count })
     }
 
     pub(crate) fn write_into<W: Write>(&self, mut writer: W) -> io::Result<usize> {
         writer.write_u64::<LittleEndian>(self.index_block_offset)?;
         writer.write_u8(self.compression_type as u8)?;
-        writer.write_u64::<LittleEndian>(self.count_entries)?;
+        writer.write_u64::<LittleEndian>(self.entries_count)?;
 
         // Write the magic number at the end of the buffer.
         writer.write_u32::<LittleEndian>(MAGIC_V1)?;
@@ -71,7 +73,7 @@ mod tests {
             file_version: FileVersion::FormatV1,
             index_block_offset: 0,
             compression_type: CompressionType::None,
-            count_entries: 0,
+            entries_count: 0,
         };
 
         let mut cursor = Cursor::new(Vec::new());

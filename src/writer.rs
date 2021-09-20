@@ -6,6 +6,8 @@ use byteorder::{BigEndian, WriteBytesExt};
 
 use crate::block_writer::BlockWriter;
 use crate::compression::{compress, CompressionType};
+use crate::count_write::CountWrite;
+use crate::metadata::{FileVersion, Metadata};
 
 pub const DEFAULT_BLOCK_SIZE: usize = 8192;
 pub const MIN_BLOCK_SIZE: usize = 1024;
@@ -66,39 +68,52 @@ impl WriterBuilder {
     }
 
     /// Creates the [`Writer`] that will write into the provided [`io::Write`] type.
-    pub fn build<W: io::Write>(&self, mut writer: W) -> io::Result<Writer<W>> {
-        // We first write the compression type.
-        // TODO write a magic number too.
-        writer.write_u8(self.compression_type as u8)?;
-
-        let mut bwb = BlockWriter::builder();
+    pub fn build<W: io::Write>(&self, writer: W) -> Writer<W> {
+        let mut block_writer_builder = BlockWriter::builder();
         if let Some(interval) = self.index_key_interval {
-            bwb.index_key_interval(interval);
+            block_writer_builder.index_key_interval(interval);
         }
 
-        Ok(Writer {
-            block_writer: bwb.build(),
+        let mut index_block_writer_builder = BlockWriter::builder();
+        if let Some(interval) = self.index_key_interval {
+            index_block_writer_builder.index_key_interval(interval);
+        }
+
+        Writer {
+            block_writer: block_writer_builder.build(),
+            index_block_writer: index_block_writer_builder.build(),
             compression_type: self.compression_type,
             compression_level: self.compression_level,
             block_size: self.block_size,
-            writer,
-        })
+            entries_count: 0,
+            writer: CountWrite::new(writer),
+        }
     }
 
     /// Creates the [`Writer`] that will write into a [`Vec`] of bytes.
     pub fn memory(&mut self) -> Writer<Vec<u8>> {
-        self.build(Vec::new()).unwrap()
+        self.build(Vec::new())
     }
 }
 
 /// A struct you can use to write entries into any [`io::Write`] type,
 /// entries must be inserted in key-order.
 pub struct Writer<W> {
+    /// The block writer that is currently storing the key/values entries.
     block_writer: BlockWriter,
+    /// The block writer that associates the offset (big endian u64) of the
+    /// blocks in the file with the last key of these given blocks.
+    index_block_writer: BlockWriter,
+    /// The compression method used to compress individual blocks.
     compression_type: CompressionType,
+    /// The compression level used to compress individual blocks.
     compression_level: u32,
+    /// The amount of bytes to reach before dumping this block on disk.
     block_size: usize,
-    writer: W,
+    /// The amount of key already inserted.
+    entries_count: u64,
+    /// The writer in which we write the block, index block and footer metadata.
+    writer: CountWrite<W>,
 }
 
 impl Writer<Vec<u8>> {
@@ -117,7 +132,7 @@ impl Writer<()> {
 
 impl<W: io::Write> Writer<W> {
     /// Creates a [`Writer`] that will write into the provided [`io::Write`] type.
-    pub fn new(writer: W) -> io::Result<Writer<W>> {
+    pub fn new(writer: W) -> Writer<W> {
         WriterBuilder::new().build(writer)
     }
 
@@ -129,42 +144,92 @@ impl<W: io::Write> Writer<W> {
         B: AsRef<[u8]>,
     {
         self.block_writer.insert(key.as_ref(), val.as_ref());
-        if self.block_writer.current_size_estimate() >= self.block_size {
-            let buffer = self.block_writer.finish();
+        self.entries_count += 1;
 
-            // Compress, write the compressed block length then the compressed block itself.
-            let buffer = compress(self.compression_type, self.compression_level, buffer.as_ref())?;
-            let block_len = buffer.len().try_into().unwrap();
-            self.writer.write_u64::<BigEndian>(block_len)?;
-            self.writer.write_all(&buffer)?;
+        if self.block_writer.current_size_estimate() >= self.block_size {
+            // Only write a block if there is at least a key in it.
+            if let Some(last_key) = self.block_writer.last_key() {
+                // Get the current offset and last key of the current block,
+                // write it in the index block writer.
+                let offset = self.writer.count();
+                self.index_block_writer.insert(last_key, &offset.to_be_bytes());
+
+                compress_and_write_block(
+                    &mut self.writer,
+                    &mut self.block_writer,
+                    self.compression_type,
+                    self.compression_level,
+                )?;
+            }
         }
+
         Ok(())
     }
 
-    /// Consumes this [`Writer`] and fetches the latest block currently being built.
+    /// Consumes this [`Writer`] and write the latest block currently being built.
     ///
     /// You must call this method before using the underlying [`io::Write`] type.
     pub fn finish(self) -> io::Result<()> {
         self.into_inner().map(drop)
     }
 
-    /// Consumes this [`Writer`] and fetches the latest block currenty being built.
+    /// Consumes this [`Writer`] and write the latest block currenty being built.
     ///
     /// Returns the underlying [`io::Write`] provided type.
     pub fn into_inner(mut self) -> io::Result<W> {
-        if !self.block_writer.is_empty() {
-            let buffer = self.block_writer.finish();
-            let buffer = buffer.as_ref();
+        // Write the last block only if it is not empty.
+        if let Some(last_key) = self.block_writer.last_key() {
+            // Get the current offset and last key of the current block,
+            // write it in the index block writer.
+            let offset = self.writer.count();
+            self.index_block_writer.insert(last_key, &offset.to_be_bytes());
 
-            // Compress, write the compressed block length then the compressed block itself.
-            let buffer = compress(self.compression_type, self.compression_level, buffer)?;
-            let block_len = buffer.len().try_into().unwrap();
-            self.writer.write_u64::<BigEndian>(block_len)?;
-            self.writer.write_all(&buffer)?;
+            compress_and_write_block(
+                &mut self.writer,
+                &mut self.block_writer,
+                self.compression_type,
+                self.compression_level,
+            )?;
         }
 
-        Ok(self.writer)
+        // We must write the index block to the file.
+        let index_block_offset = self.writer.count();
+        compress_and_write_block(
+            &mut self.writer,
+            &mut self.index_block_writer,
+            self.compression_type,
+            self.compression_level,
+        )?;
+
+        // Then we can write the metadata that specify where the index block is stored.
+        let metadata = Metadata {
+            file_version: FileVersion::FormatV1,
+            index_block_offset,
+            compression_type: self.compression_type,
+            entries_count: self.entries_count,
+        };
+
+        metadata.write_into(&mut self.writer)?;
+        self.writer.into_inner()
     }
+}
+
+/// Compress and write the block into the writer prefixed by the length of it as an `u64`.
+fn compress_and_write_block<W: io::Write>(
+    mut writer: W,
+    block_writer: &mut BlockWriter,
+    compression_type: CompressionType,
+    compression_level: u32,
+) -> io::Result<()> {
+    let buffer = block_writer.finish();
+
+    // Compress, write the length of the compressed block then the block itself.
+    let buffer = compress(compression_type, compression_level, buffer.as_ref())?;
+    let block_len = buffer.len().try_into().unwrap();
+    writer.write_u64::<BigEndian>(block_len)?;
+    writer.write_all(&buffer)?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -174,7 +239,7 @@ mod tests {
     #[test]
     fn no_compression() {
         let wb = Writer::builder();
-        let mut writer = wb.build(Vec::new()).unwrap();
+        let mut writer = wb.build(Vec::new());
 
         for x in 0..2000u32 {
             let x = x.to_be_bytes();
@@ -190,7 +255,7 @@ mod tests {
     fn snappy_compression() {
         let mut wb = Writer::builder();
         wb.compression_type(CompressionType::Snappy);
-        let mut writer = wb.build(Vec::new()).unwrap();
+        let mut writer = wb.build(Vec::new());
 
         for x in 0..2000u32 {
             let x = x.to_be_bytes();

@@ -83,7 +83,7 @@ impl<R, MF> Merger<R, MF> {
     }
 }
 
-impl<R: io::Read, MF> Merger<R, MF> {
+impl<R: io::Read + io::Seek, MF> Merger<R, MF> {
     /// Consumes this [`Merger`] and outputs a stream of the merged entries in key-order.
     pub fn into_stream_merger_iter(self) -> Result<MergerIter<R, MF>, Error> {
         let mut heap = BinaryHeap::new();
@@ -105,7 +105,7 @@ impl<R: io::Read, MF> Merger<R, MF> {
 
 impl<R, MF, U> Merger<R, MF>
 where
-    R: io::Read,
+    R: io::Read + io::Seek,
     MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
 {
     /// Consumes this [`Merger`] and streams the entries to the [`Writer`] given in parameter.
@@ -133,7 +133,7 @@ pub struct MergerIter<R, MF> {
 
 impl<R, MF, U> MergerIter<R, MF>
 where
-    R: io::Read,
+    R: io::Read + io::Seek,
     MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
 {
     /// Yield the entries in key-order where values have been merged when needed.

@@ -8,6 +8,7 @@ extern crate quickcheck;
 mod block;
 mod block_writer;
 mod compression;
+mod count_write;
 mod error;
 mod merger;
 mod metadata;
@@ -19,6 +20,7 @@ mod writer;
 pub use self::compression::CompressionType;
 pub use self::error::Error;
 pub use self::merger::{Merger, MergerBuilder, MergerIter};
+pub use self::metadata::FileVersion;
 pub use self::reader::Reader;
 #[cfg(feature = "tempfile")]
 pub use self::sorter::TempFileChunk;

@@ -1,6 +1,6 @@
 use std::borrow::{Borrow, Cow};
 use std::convert::TryInto;
-use std::io::{self, ErrorKind};
+use std::io;
 use std::mem::{self, size_of};
 
 use byteorder::{BigEndian, ReadBytesExt};
@@ -28,7 +28,7 @@ impl Block {
     pub fn new<R: io::Read>(
         reader: &mut R,
         compression_type: CompressionType,
-    ) -> Result<Option<Block>, Error> {
+    ) -> Result<Block, Error> {
         let mut block_reader = Block {
             compression_type,
             buffer: Vec::new(),
@@ -36,20 +36,14 @@ impl Block {
             index_offsets: Vec::new(),
         };
 
-        if block_reader.read_from(reader)? {
-            Ok(Some(block_reader))
-        } else {
-            Ok(None)
-        }
+        block_reader.read_from(reader)?;
+
+        Ok(block_reader)
     }
 
     /// Returns `true` if it was able to read a new Block.
-    pub fn read_from<R: io::Read>(&mut self, reader: &mut R) -> Result<bool, Error> {
-        let block_len = match reader.read_u64::<BigEndian>() {
-            Ok(block_len) => block_len,
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(false),
-            Err(e) => return Err(Error::from(e)),
-        };
+    pub fn read_from<R: io::Read>(&mut self, reader: &mut R) -> Result<(), Error> {
+        let block_len = reader.read_u64::<BigEndian>()?;
 
         // We reset the cursor's position and decompress
         // the block into the cursor's buffer.
@@ -77,7 +71,7 @@ impl Block {
         self.index_offsets.extend(index_chunk_iter);
         self.payload_size = buffer_len - index_bytes_size - size_of::<u32>();
 
-        Ok(true)
+        Ok(())
     }
 
     /// Returns the payload bytes.
@@ -312,7 +306,7 @@ mod tests {
         final_buffer.extend_from_slice(&(buffer.as_ref().len() as u64).to_be_bytes());
         final_buffer.extend_from_slice(buffer.as_ref());
 
-        let block = Block::new(&mut &final_buffer[..], CompressionType::None).unwrap().unwrap();
+        let block = Block::new(&mut &final_buffer[..], CompressionType::None).unwrap();
         let mut iter = BlockIter::new(&block);
         for n in 0..2000i32 {
             let (k, v) = iter.next().unwrap();
@@ -336,7 +330,7 @@ mod tests {
         final_buffer.extend_from_slice(&(buffer.as_ref().len() as u64).to_be_bytes());
         final_buffer.extend_from_slice(buffer.as_ref());
 
-        let block = Block::new(&mut &final_buffer[..], CompressionType::None).unwrap().unwrap();
+        let block = Block::new(&mut &final_buffer[..], CompressionType::None).unwrap();
         let mut iter = BlockRevIter::new(&block);
         for n in (0..2000i32).rev() {
             let (k, v) = iter.next().unwrap();
@@ -361,7 +355,7 @@ mod tests {
         final_buffer.extend_from_slice(&(buffer.as_ref().len() as u64).to_be_bytes());
         final_buffer.extend_from_slice(buffer.as_ref());
 
-        let block = Block::new(&mut &final_buffer[..], CompressionType::None).unwrap().unwrap();
+        let block = Block::new(&mut &final_buffer[..], CompressionType::None).unwrap();
         let mut cursor = BlockCursor::new(&block);
         for n in 0..2020i32 {
             match nums.binary_search(&n) {
@@ -396,7 +390,7 @@ mod tests {
         final_buffer.extend_from_slice(&(buffer.as_ref().len() as u64).to_be_bytes());
         final_buffer.extend_from_slice(buffer.as_ref());
 
-        let block = Block::new(&mut &final_buffer[..], CompressionType::None).unwrap().unwrap();
+        let block = Block::new(&mut &final_buffer[..], CompressionType::None).unwrap();
         let mut cursor = BlockCursor::new(&block);
         for n in 0..2020i32 {
             match nums.binary_search(&n) {
