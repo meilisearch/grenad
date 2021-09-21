@@ -294,6 +294,33 @@ mod tests {
     use crate::block_writer::BlockWriter;
 
     #[test]
+    fn simple() {
+        let mut writer = BlockWriter::new();
+
+        for x in 0..2000u32 {
+            let x = x.to_be_bytes();
+            writer.insert(&x, &x);
+        }
+
+        let buffer = writer.finish();
+        let mut final_buffer = Vec::new();
+        final_buffer.extend_from_slice(&(buffer.as_ref().len() as u64).to_be_bytes());
+        final_buffer.extend_from_slice(buffer.as_ref());
+
+        let block = Block::new(&mut &final_buffer[..], CompressionType::None).unwrap();
+        let mut cursor = BlockCursor::new(block);
+        let mut x: u32 = 0;
+
+        while let Some((k, v)) = cursor.move_on_next() {
+            assert_eq!(k, x.to_be_bytes());
+            assert_eq!(v, x.to_be_bytes());
+            x += 1;
+        }
+
+        assert_eq!(x, 2000);
+    }
+
+    #[test]
     fn easy_iter() {
         let mut bb = BlockWriter::new();
 
@@ -406,7 +433,7 @@ mod tests {
                         .move_on_key_lower_than_or_equal_to(&n.to_be_bytes())
                         .map(|(k, _)| k.try_into().map(i32::from_be_bytes).unwrap());
                     let expected = i.checked_sub(1).and_then(|i| nums.get(i)).copied();
-                    assert_eq!(k, expected, "{}: {:?} != {:?}", n, k, expected);
+                    assert_eq!(k, expected, "queried value {}", n);
                 }
             }
         }

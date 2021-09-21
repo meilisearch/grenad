@@ -406,7 +406,7 @@ where
             .drain(..)
             .map(|mut chunk| {
                 chunk.seek(SeekFrom::Start(0))?;
-                Reader::new(chunk).map_err(Error::convert_merge_error)
+                Reader::new(chunk).and_then(Reader::into_cursor).map_err(Error::convert_merge_error)
             })
             .collect();
 
@@ -448,7 +448,7 @@ where
             .into_iter()
             .map(|mut file| {
                 file.seek(SeekFrom::Start(0))?;
-                Reader::new(file).map_err(Error::convert_merge_error)
+                Reader::new(file).and_then(Reader::into_cursor).map_err(Error::convert_merge_error)
             })
             .collect();
 
@@ -543,8 +543,9 @@ mod tests {
         sorter.write_into_stream_writer(&mut bytes).unwrap();
         let bytes = bytes.into_inner().unwrap();
 
-        let mut reader = Reader::new(Cursor::new(bytes.as_slice())).unwrap();
-        while let Some((key, val)) = reader.next().unwrap() {
+        let reader = Reader::new(Cursor::new(bytes.as_slice())).unwrap();
+        let mut cursor = reader.into_cursor().unwrap();
+        while let Some((key, val)) = cursor.move_on_next().unwrap() {
             match key {
                 b"hello" => assert_eq!(val, b"kiki"),
                 b"abstract" => assert_eq!(val, b"lollol"),
@@ -574,10 +575,11 @@ mod tests {
         sorter.write_into_stream_writer(&mut bytes).unwrap();
         let bytes = bytes.into_inner().unwrap();
 
-        let mut reader = Reader::new(Cursor::new(bytes.as_slice())).unwrap();
-        let (key, val) = reader.next().unwrap().unwrap();
+        let reader = Reader::new(Cursor::new(bytes.as_slice())).unwrap();
+        let mut cursor = reader.into_cursor().unwrap();
+        let (key, val) = cursor.move_on_next().unwrap().unwrap();
         assert_eq!(key, b"hello");
         assert!(val.iter().eq(repeat(b"kiki").take(200).flatten()));
-        assert!(reader.next().unwrap().is_none());
+        assert!(cursor.move_on_next().unwrap().is_none());
     }
 }
