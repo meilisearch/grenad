@@ -46,6 +46,12 @@ impl FromStr for CompressionType {
     }
 }
 
+impl Default for CompressionType {
+    fn default() -> CompressionType {
+        CompressionType::None
+    }
+}
+
 /// An invalid compression type have been read and the block can't be de/compressed.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InvalidCompressionType;

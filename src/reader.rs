@@ -55,7 +55,7 @@ impl<R> Reader<R> {
     /// Consumes the [`Reader`] and returns the underlying [`io::Read`] type.
     ///
     /// The returned [`io::Read`] type has been [`io::Seek`]ed which means that
-    /// you must seek it back to the front to be read from the start.
+    /// you must seek it back to the front to read it from the start.
     pub fn into_inner(self) -> R {
         self.reader
     }
