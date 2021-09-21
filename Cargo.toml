@@ -19,6 +19,7 @@ zstd = { version = "0.5.1", optional = true }
 
 [dev-dependencies]
 quickcheck = "0.9"
+rand = "0.8.4"
 
 [features]
 default = ["tempfile", "snappy"]
