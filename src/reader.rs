@@ -208,40 +208,18 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
     /// specified one and returns the corresponding entry.
     pub fn move_on_key_lower_than_or_equal_to(
         &mut self,
-        key: &[u8],
+        target_key: &[u8],
     ) -> Result<Option<(&[u8], &[u8])>, Error> {
-        // We move on the block which has a key greater than or equal to the key we are
-        // searching for as the key stored in the index block is the last key of the block.
-        // The key is assured to be between the last key of this block and the start of the previous block.
-        match self.index_block_cursor.move_on_key_greater_than_or_equal_to(key) {
-            Some((_, offset_bytes)) => {
-                let offset = offset_bytes.try_into().map(u64::from_be_bytes).unwrap();
-                self.reader.reader.seek(SeekFrom::Start(offset))?;
-                let current_cursor = self.current_cursor.insert(
-                    Block::new(&mut self.reader.reader, self.reader.metadata.compression_type)
-                        .map(Block::into_cursor)?,
-                );
-
-                match current_cursor.move_on_key_lower_than_or_equal_to(key) {
-                    Some((key, val)) => {
-                        // This is a trick to make the compiler happy...
-                        // https://github.com/rust-lang/rust/issues/47680
-                        let key: &'static _ = unsafe { mem::transmute(key) };
-                        let val: &'static _ = unsafe { mem::transmute(val) };
-                        Ok(Some((key, val)))
-                    }
-                    None => {
-                        // We search in the previous block if we can't find a key lower than
-                        // the queried key in this one.
-                        self.current_cursor = self.prev_block_from_index()?.map(Block::into_cursor);
-                        Ok(self
-                            .current_cursor
-                            .as_mut()
-                            .and_then(|cc| cc.move_on_key_lower_than_or_equal_to(key)))
-                    }
-                }
+        match self.move_on_key_greater_than_or_equal_to(target_key)? {
+            Some((key, val)) if key == target_key => {
+                // This is a trick to make the compiler happy...
+                // https://github.com/rust-lang/rust/issues/47680
+                let key: &'static _ = unsafe { mem::transmute(key) };
+                let val: &'static _ = unsafe { mem::transmute(val) };
+                Ok(Some((key, val)))
             }
-            None => Ok(None),
+            Some(_) => self.move_on_prev(),
+            None => self.move_on_last().map(|opt| opt.filter(|(key, _)| *key <= target_key)),
         }
     }
 
@@ -507,26 +485,27 @@ mod tests {
 
         let reader = Reader::new(Cursor::new(bytes.as_slice())).unwrap();
         let mut cursor = reader.into_cursor().unwrap();
-        // for n in 0..24020i32 {
-        let n = 2348;
-        match nums.binary_search(&n) {
-            Ok(i) => {
-                let n = nums[i];
-                let (k, _) =
-                    cursor.move_on_key_lower_than_or_equal_to(&n.to_be_bytes()).unwrap().unwrap();
-                let k = k.try_into().map(i32::from_be_bytes).unwrap();
-                assert_eq!(k, n);
-            }
-            Err(i) => {
-                let k = cursor
-                    .move_on_key_lower_than_or_equal_to(&n.to_be_bytes())
-                    .unwrap()
-                    .map(|(k, _)| k.try_into().map(i32::from_be_bytes).unwrap());
-                let expected = i.checked_sub(1).and_then(|i| nums.get(i)).copied();
-                assert_eq!(k, expected, "queried value {}", n);
+        for n in 0..24020i32 {
+            match nums.binary_search(&n) {
+                Ok(i) => {
+                    let n = nums[i];
+                    let (k, _) = cursor
+                        .move_on_key_lower_than_or_equal_to(&n.to_be_bytes())
+                        .unwrap()
+                        .unwrap();
+                    let k = k.try_into().map(i32::from_be_bytes).unwrap();
+                    assert_eq!(k, n);
+                }
+                Err(i) => {
+                    let k = cursor
+                        .move_on_key_lower_than_or_equal_to(&n.to_be_bytes())
+                        .unwrap()
+                        .map(|(k, _)| k.try_into().map(i32::from_be_bytes).unwrap());
+                    let expected = i.checked_sub(1).and_then(|i| nums.get(i)).copied();
+                    assert_eq!(k, expected, "queried value {}", n);
+                }
             }
         }
-        // }
     }
 
     #[test]
