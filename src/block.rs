@@ -21,7 +21,7 @@ pub struct Block {
     payload_size: usize,
     /// The list of index offsets where some key resides,
     /// can be used to jump inside of the block.
-    index_offsets: Vec<u32>,
+    index_offsets: Vec<u64>,
 }
 
 impl Block {
@@ -60,13 +60,13 @@ impl Block {
         let index_size_bytes = &self.buffer[buffer_len - size_of::<u32>()..][..size_of::<u32>()];
         let index_size = index_size_bytes.try_into().map(u32::from_be_bytes).unwrap() as usize;
 
-        let index_bytes_size = index_size * size_of::<u32>();
+        let index_bytes_size = index_size * size_of::<u64>();
         let index_bytes =
             &self.buffer[buffer_len - size_of::<u32>() - index_bytes_size..][..index_bytes_size];
         let index_chunk_iter = index_bytes
-            .chunks_exact(size_of::<u32>())
+            .chunks_exact(size_of::<u64>())
             .filter_map(|s| TryInto::try_into(s).ok())
-            .map(u32::from_be_bytes);
+            .map(u64::from_be_bytes);
         self.index_offsets.clear();
         self.index_offsets.extend(index_chunk_iter);
         self.payload_size = buffer_len - index_bytes_size - size_of::<u32>();
@@ -80,7 +80,7 @@ impl Block {
     }
 
     /// Returns the index offsets.
-    pub fn index_offsets(&self) -> &[u32] {
+    pub fn index_offsets(&self) -> &[u64] {
         &self.index_offsets
     }
 
@@ -183,7 +183,7 @@ impl<B: Borrow<Block>> BlockCursor<B> {
                 let offsets = self.block.borrow().index_offsets();
                 // We go to the previous offset corresponding to the current pointed key.
                 let i = offsets
-                    .binary_search(&(current_offset as u32))
+                    .binary_search(&(current_offset as u64))
                     .unwrap_or_else(|x| x) // extract Err and Ok
                     .checked_sub(1)?;
 

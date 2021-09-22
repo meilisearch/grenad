@@ -57,7 +57,7 @@ pub struct BlockWriter {
     /// footer index, used to seek into the block.
     index_key_interval: NonZeroUsize,
     /// The index itself that store some key offsets.
-    index_offsets: Vec<u32>,
+    index_offsets: Vec<u64>,
     /// This counter increments every time we put a key in the key index and
     /// resets every `index_key_interval`, every time it resets we store
     /// the offset of the inserted key in the footer `index_offsets` vector.
@@ -86,7 +86,7 @@ impl BlockWriter {
 
     pub fn current_size_estimate(&self) -> usize {
         // The size of the buffer + the total size of the indexes in the footer + the count of indexes.
-        self.buffer.len() + self.index_offsets.len() * mem::size_of::<u32>() + mem::size_of::<u32>()
+        self.buffer.len() + self.index_offsets.len() * mem::size_of::<u64>() + mem::size_of::<u32>()
     }
 
     /// Returns the last key inserted in this block.
@@ -101,7 +101,7 @@ impl BlockWriter {
         assert!(val.len() <= u32::max_value() as usize);
 
         if self.index_key_counter == self.index_key_interval.get() {
-            self.index_offsets.push(self.buffer.len() as u32);
+            self.index_offsets.push(self.buffer.len() as u64);
             self.index_key_counter = 0;
         }
 
@@ -130,7 +130,7 @@ impl BlockWriter {
         // We write the index offsets at the end of the file,
         // followed by the number of index offsets.
         let index_offsets_count: u32 = self.index_offsets.len().try_into().unwrap();
-        self.buffer.extend(self.index_offsets.iter().map(|off| off.to_be_bytes()).flatten());
+        self.buffer.extend(self.index_offsets.iter().copied().map(u64::to_be_bytes).flatten());
         self.buffer.extend_from_slice(&index_offsets_count.to_be_bytes());
 
         BlockBuffer { block_builder: self }
