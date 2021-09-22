@@ -114,6 +114,10 @@ impl Block {
 
         Some((key, val, offset))
     }
+
+    pub fn into_cursor(self) -> BlockCursor<Block> {
+        BlockCursor::new(self)
+    }
 }
 
 #[derive(Clone)]
@@ -123,12 +127,8 @@ pub struct BlockCursor<B> {
 }
 
 impl<B> BlockCursor<B> {
-    pub fn new(block: B) -> BlockCursor<B> {
+    fn new(block: B) -> BlockCursor<B> {
         BlockCursor { block, current_offset: None }
-    }
-
-    pub fn into_inner(self) -> B {
-        self.block
     }
 }
 
@@ -258,36 +258,6 @@ impl<B: Borrow<Block>> BlockCursor<B> {
     }
 }
 
-#[derive(Clone)]
-pub struct BlockIter<'b> {
-    cursor: BlockCursor<&'b Block>,
-}
-
-impl<'b> BlockIter<'b> {
-    pub fn new(block: &'b Block) -> BlockIter<'b> {
-        BlockIter { cursor: BlockCursor::new(block) }
-    }
-
-    fn next(&mut self) -> Option<(&[u8], &[u8])> {
-        self.cursor.move_on_next()
-    }
-}
-
-#[derive(Clone)]
-pub struct BlockRevIter<'b> {
-    cursor: BlockCursor<&'b Block>,
-}
-
-impl<'b> BlockRevIter<'b> {
-    pub fn new(block: &'b Block) -> BlockRevIter<'b> {
-        BlockRevIter { cursor: BlockCursor::new(block) }
-    }
-
-    fn next(&mut self) -> Option<(&[u8], &[u8])> {
-        self.cursor.move_on_prev()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,9 +304,9 @@ mod tests {
         final_buffer.extend_from_slice(buffer.as_ref());
 
         let block = Block::new(&mut &final_buffer[..], CompressionType::None).unwrap();
-        let mut iter = BlockIter::new(&block);
+        let mut cursor = block.into_cursor();
         for n in 0..2000i32 {
-            let (k, v) = iter.next().unwrap();
+            let (k, v) = cursor.move_on_next().unwrap();
             let k = k.try_into().map(i32::from_be_bytes).unwrap();
             let v = v.try_into().map(i32::from_be_bytes).unwrap();
             assert_eq!(k, n);
@@ -358,9 +328,9 @@ mod tests {
         final_buffer.extend_from_slice(buffer.as_ref());
 
         let block = Block::new(&mut &final_buffer[..], CompressionType::None).unwrap();
-        let mut iter = BlockRevIter::new(&block);
+        let mut cursor = block.into_cursor();
         for n in (0..2000i32).rev() {
-            let (k, v) = iter.next().unwrap();
+            let (k, v) = cursor.move_on_prev().unwrap();
             let k = k.try_into().map(i32::from_be_bytes).unwrap();
             let v = v.try_into().map(i32::from_be_bytes).unwrap();
             assert_eq!(k, n);

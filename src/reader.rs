@@ -20,14 +20,29 @@ impl<R: io::Read + io::Seek> Reader<R> {
         Metadata::read_from(&mut reader).map(|metadata| Reader { metadata, reader })
     }
 
+    /// Converts this [`Reader`] into a [`ReaderCursor`].
     pub fn into_cursor(mut self) -> Result<ReaderCursor<R>, Error> {
         self.reader.seek(SeekFrom::Start(self.metadata.index_block_offset))?;
         let index_block = Block::new(&mut self.reader, self.metadata.compression_type)?;
         Ok(ReaderCursor {
-            index_block_cursor: BlockCursor::new(index_block),
+            index_block_cursor: index_block.into_cursor(),
             current_cursor: None,
             reader: self,
         })
+    }
+
+    /// Converts this [`Reader`] into a [`PrefixIter`].
+    pub fn into_prefix_iter(self, prefix: Vec<u8>) -> Result<PrefixIter<R>, Error> {
+        self.into_cursor().map(|cursor| PrefixIter::new(cursor, prefix))
+    }
+
+    /// Converts this [`Reader`] into a [`RangeIter`].
+    pub fn into_range_iter<S, A>(self, range: S) -> Result<RangeIter<R>, Error>
+    where
+        S: RangeBounds<A>,
+        A: AsRef<[u8]>,
+    {
+        self.into_cursor().map(|cursor| RangeIter::new(cursor, range))
     }
 }
 
@@ -61,6 +76,7 @@ impl<R> Reader<R> {
     }
 }
 
+/// A cursor that can move forward backward and move on a specified key.
 #[derive(Clone)]
 pub struct ReaderCursor<R> {
     index_block_cursor: BlockCursor<Block>,
@@ -84,6 +100,7 @@ impl<R> ReaderCursor<R> {
 }
 
 impl<R: io::Read + io::Seek> ReaderCursor<R> {
+    /// Returns the block containing the entries that is following the current one.
     pub(crate) fn next_block_from_index(&mut self) -> Result<Option<Block>, Error> {
         match self.index_block_cursor.move_on_next() {
             Some((_, offset_bytes)) => {
@@ -95,6 +112,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
         }
     }
 
+    /// Returns the block containing the entries that is preceding the current one.
     pub(crate) fn prev_block_from_index(&mut self) -> Result<Option<Block>, Error> {
         match self.index_block_cursor.move_on_prev() {
             Some((_, offset_bytes)) => {
@@ -106,6 +124,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
         }
     }
 
+    /// Moves the cursor on the first entry and returns it.
     pub fn move_on_first(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
         match self.index_block_cursor.move_on_first() {
             Some((_, offset_bytes)) => {
@@ -113,7 +132,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
                 self.reader.reader.seek(SeekFrom::Start(offset))?;
                 let current_cursor = self.current_cursor.insert(
                     Block::new(&mut self.reader.reader, self.reader.metadata.compression_type)
-                        .map(BlockCursor::new)?,
+                        .map(Block::into_cursor)?,
                 );
                 Ok(current_cursor.move_on_first())
             }
@@ -124,6 +143,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
         }
     }
 
+    /// Moves the cursor on the last entry and returns it.
     pub fn move_on_last(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
         match self.index_block_cursor.move_on_last() {
             Some((_, offset_bytes)) => {
@@ -131,7 +151,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
                 self.reader.reader.seek(SeekFrom::Start(offset))?;
                 let current_cursor = self.current_cursor.insert(
                     Block::new(&mut self.reader.reader, self.reader.metadata.compression_type)
-                        .map(BlockCursor::new)?,
+                        .map(Block::into_cursor)?,
                 );
                 Ok(current_cursor.move_on_last())
             }
@@ -142,6 +162,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
         }
     }
 
+    /// Moves the cursor on the entry following the current one and returns it.
     pub fn move_on_next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
         match self.current_cursor.as_mut().map(BlockCursor::move_on_next) {
             Some(Some((key, val))) => {
@@ -151,7 +172,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
                 let val: &'static _ = unsafe { mem::transmute(val) };
                 Ok(Some((key, val)))
             }
-            Some(None) => match self.next_block_from_index()?.map(BlockCursor::new) {
+            Some(None) => match self.next_block_from_index()?.map(Block::into_cursor) {
                 Some(current_cursor) => {
                     let current_cursor = self.current_cursor.insert(current_cursor);
                     Ok(current_cursor.move_on_first())
@@ -162,6 +183,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
         }
     }
 
+    /// Moves the cursor on the entry preceding the current one and returns it.
     pub fn move_on_prev(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
         match self.current_cursor.as_mut().map(BlockCursor::move_on_prev) {
             Some(Some((key, val))) => {
@@ -171,7 +193,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
                 let val: &'static _ = unsafe { mem::transmute(val) };
                 Ok(Some((key, val)))
             }
-            Some(None) => match self.prev_block_from_index()?.map(BlockCursor::new) {
+            Some(None) => match self.prev_block_from_index()?.map(Block::into_cursor) {
                 Some(current_cursor) => {
                     let current_cursor = self.current_cursor.insert(current_cursor);
                     Ok(current_cursor.move_on_last())
@@ -182,6 +204,8 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
         }
     }
 
+    /// Moves the cursor on the entry with a key lower than or equal to the
+    /// specified one and returns the corresponding entry.
     pub fn move_on_key_lower_than_or_equal_to(
         &mut self,
         key: &[u8],
@@ -195,7 +219,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
                 self.reader.reader.seek(SeekFrom::Start(offset))?;
                 let current_cursor = self.current_cursor.insert(
                     Block::new(&mut self.reader.reader, self.reader.metadata.compression_type)
-                        .map(BlockCursor::new)?,
+                        .map(Block::into_cursor)?,
                 );
 
                 match current_cursor.move_on_key_lower_than_or_equal_to(key) {
@@ -209,7 +233,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
                     None => {
                         // We search in the previous block if we can't find a key lower than
                         // the queried key in this one.
-                        self.current_cursor = self.prev_block_from_index()?.map(BlockCursor::new);
+                        self.current_cursor = self.prev_block_from_index()?.map(Block::into_cursor);
                         Ok(self
                             .current_cursor
                             .as_mut()
@@ -221,6 +245,8 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
         }
     }
 
+    /// Moves the cursor on the entry with a key greater than or equal to the
+    /// specified one and returns the corresponding entry.
     pub fn move_on_key_greater_than_or_equal_to(
         &mut self,
         key: &[u8],
@@ -233,7 +259,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
                 self.reader.reader.seek(SeekFrom::Start(offset))?;
                 let current_cursor = self.current_cursor.insert(
                     Block::new(&mut self.reader.reader, self.reader.metadata.compression_type)
-                        .map(BlockCursor::new)?,
+                        .map(Block::into_cursor)?,
                 );
                 Ok(current_cursor.move_on_key_greater_than_or_equal_to(key))
             }
@@ -250,6 +276,8 @@ impl<R> Deref for ReaderCursor<R> {
     }
 }
 
+/// An iterator that is able to yield all the entries with
+/// a key that starts with a given prefix.
 #[derive(Clone)]
 pub struct PrefixIter<R> {
     cursor: ReaderCursor<R>,
@@ -258,7 +286,7 @@ pub struct PrefixIter<R> {
 }
 
 impl<R: io::Read + io::Seek> PrefixIter<R> {
-    pub fn new(cursor: ReaderCursor<R>, prefix: Vec<u8>) -> PrefixIter<R> {
+    fn new(cursor: ReaderCursor<R>, prefix: Vec<u8>) -> PrefixIter<R> {
         PrefixIter { cursor, prefix, move_on_first_prefix: true }
     }
 
@@ -283,6 +311,7 @@ impl<R: io::Read + io::Seek> PrefixIter<R> {
     }
 }
 
+/// An iterator that is able to yield all the entries lying in a specified range.
 #[derive(Clone)]
 pub struct RangeIter<R> {
     cursor: ReaderCursor<R>,
@@ -291,7 +320,7 @@ pub struct RangeIter<R> {
 }
 
 impl<R: io::Read + io::Seek> RangeIter<R> {
-    pub fn new<S, A>(cursor: ReaderCursor<R>, range: S) -> RangeIter<R>
+    fn new<S, A>(cursor: ReaderCursor<R>, range: S) -> RangeIter<R>
     where
         S: RangeBounds<A>,
         A: AsRef<[u8]>,
@@ -334,7 +363,7 @@ impl<R: io::Read + io::Seek> RangeIter<R> {
     }
 }
 
-/// Map the internal bound types to another type.
+/// Map the internal bound type to another type.
 fn map_bound<T, U, F: FnOnce(T) -> U>(bound: Bound<T>, f: F) -> Bound<U> {
     match bound {
         Bound::Unbounded => Bound::Unbounded,
@@ -522,8 +551,8 @@ mod tests {
 
             let expected: Vec<_> = nums.range(a..=b).copied().collect();
 
-            let cursor = reader.clone().into_cursor().unwrap();
-            let mut range_iter = RangeIter::new(cursor, a.to_be_bytes()..=b.to_be_bytes());
+            let range = a.to_be_bytes()..=b.to_be_bytes();
+            let mut range_iter = reader.clone().into_range_iter(range).unwrap();
             let mut found = Vec::with_capacity(expected.len());
             while let Some((k, v)) = range_iter.next().unwrap() {
                 let k = k.try_into().map(i32::from_be_bytes).unwrap();

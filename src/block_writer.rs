@@ -80,10 +80,6 @@ impl BlockWriter {
         self.index_key_counter = 0;
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.buffer.is_empty()
-    }
-
     pub fn current_size_estimate(&self) -> usize {
         // The size of the buffer + the total size of the indexes in the footer + the count of indexes.
         self.buffer.len() + self.index_offsets.len() * mem::size_of::<u64>() + mem::size_of::<u32>()
