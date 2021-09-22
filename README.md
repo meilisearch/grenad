@@ -1,36 +1,36 @@
 This library provides different ways to sort, merge, write,
 and read key-value pairs efficiently.
 
-# Example: use the StreamWriter and StreamReader structs
+# Example: use the Writer and Reader structs
 
-You can use the [`StreamWriter`] struct to store key-value pairs
-into the specified [`std::io::Write`] type. The [`StreamReader`] type
+You can use the [`Writer`] struct to store key-value pairs
+into the specified [`std::io::Write`] type. The [`Reader`] type
 can then be used to read the entries.
 
 ```rust
 use std::io::Cursor;
 
-use grenad::{StreamReader, StreamWriter};
+use grenad::{Reader, Writer};
 
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
-let mut writer = StreamWriter::memory();
+let mut writer = Writer::memory();
 writer.insert("first-counter", 119_u32.to_ne_bytes())?;
 writer.insert("second-counter", 384_u32.to_ne_bytes())?;
 
 // We create a reader from our writer.
 let cursor = writer.into_inner().map(Cursor::new)?;
-let mut reader = StreamReader::new(cursor)?;
+let mut reader = Reader::new(cursor)?.into_cursor()?;
 
 // We can see that the sum of u32s is valid here.
-assert_eq!(reader.next()?, Some((&b"first-counter"[..], &119_u32.to_ne_bytes()[..])));
-assert_eq!(reader.next()?, Some((&b"second-counter"[..], &384_u32.to_ne_bytes()[..])));
-assert_eq!(reader.next()?, None);
+assert_eq!(reader.move_on_next()?, Some((&b"first-counter"[..], &119_u32.to_ne_bytes()[..])));
+assert_eq!(reader.move_on_next()?, Some((&b"second-counter"[..], &384_u32.to_ne_bytes()[..])));
+assert_eq!(reader.move_on_next()?, None);
 # Ok(()) }
 ```
 
 # Example: use the Merger struct
 
-In this example we show how you can merge multiple [`StreamReader`]s
+In this example we show how you can merge multiple [`Reader`]s
 by using a merge function when a conflict is encountered.
 
 ```rust
@@ -39,7 +39,7 @@ use std::borrow::Cow;
 use std::convert::TryInto;
 use std::io::Cursor;
 
-use grenad::{StreamMergerBuilder, StreamReader, StreamWriter};
+use grenad::{MergerBuilder, Reader, Writer};
 
 // This merge function:
 //  - parses u32s from native-endian bytes,
@@ -50,19 +50,19 @@ fn wrapping_sum_u32s<'a>(
  values: &[Cow<'a, [u8]>],
 ) -> Result<Cow<'a, [u8]>, TryFromSliceError>
 {
- let mut output: u32 = 0;
- for bytes in values.iter().map(AsRef::as_ref) {
-     let num = bytes.try_into().map(u32::from_ne_bytes)?;
-     output = output.wrapping_add(num);
- }
- Ok(Cow::Owned(output.to_ne_bytes().to_vec()))
+    let mut output: u32 = 0;
+    for bytes in values.iter().map(AsRef::as_ref) {
+        let num = bytes.try_into().map(u32::from_ne_bytes)?;
+        output = output.wrapping_add(num);
+    }
+    Ok(Cow::Owned(output.to_ne_bytes().to_vec()))
 }
 
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 // We create our writers in memory to insert our key-value pairs.
-let mut writera = StreamWriter::memory();
-let mut writerb = StreamWriter::memory();
-let mut writerc = StreamWriter::memory();
+let mut writera = Writer::memory();
+let mut writerb = Writer::memory();
+let mut writerc = Writer::memory();
 
 // We insert our key-value pairs in order and
 // mix them between our writers.
@@ -76,13 +76,13 @@ writerc.insert("first-counter", 64_u32.to_ne_bytes())?;
 let cursora = writera.into_inner().map(Cursor::new)?;
 let cursorb = writerb.into_inner().map(Cursor::new)?;
 let cursorc = writerc.into_inner().map(Cursor::new)?;
-let readera = StreamReader::new(cursora)?;
-let readerb = StreamReader::new(cursorb)?;
-let readerc = StreamReader::new(cursorc)?;
+let readera = Reader::new(cursora)?.into_cursor()?;
+let readerb = Reader::new(cursorb)?.into_cursor()?;
+let readerc = Reader::new(cursorc)?.into_cursor()?;
 
 // We create a merger that will sum our u32s when necessary,
 // and we add our readers to the list of readers to merge.
-let merger_builder = StreamMergerBuilder::new(wrapping_sum_u32s);
+let merger_builder = MergerBuilder::new(wrapping_sum_u32s);
 let merger = merger_builder.add(readera).add(readerb).add(readerc).build();
 
 // We can iterate over the entries in key-order.
@@ -117,12 +117,12 @@ fn wrapping_sum_u32s<'a>(
  values: &[Cow<'a, [u8]>],
 ) -> Result<Cow<'a, [u8]>, TryFromSliceError>
 {
- let mut output: u32 = 0;
- for bytes in values.iter().map(AsRef::as_ref) {
-     let num = bytes.try_into().map(u32::from_ne_bytes)?;
-     output = output.wrapping_add(num);
- }
- Ok(Cow::Owned(output.to_ne_bytes().to_vec()))
+    let mut output: u32 = 0;
+    for bytes in values.iter().map(AsRef::as_ref) {
+        let num = bytes.try_into().map(u32::from_ne_bytes)?;
+        output = output.wrapping_add(num);
+    }
+    Ok(Cow::Owned(output.to_ne_bytes().to_vec()))
 }
 
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
