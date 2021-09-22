@@ -21,7 +21,7 @@ pub use self::compression::CompressionType;
 pub use self::error::Error;
 pub use self::merger::{Merger, MergerBuilder, MergerIter};
 pub use self::metadata::FileVersion;
-pub use self::reader::{Reader, ReaderCursor};
+pub use self::reader::{PrefixIter, RangeIter, Reader, ReaderCursor};
 #[cfg(feature = "tempfile")]
 pub use self::sorter::TempFileChunk;
 pub use self::sorter::{ChunkCreator, CursorVec, DefaultChunkCreator, Sorter, SorterBuilder};

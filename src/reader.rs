@@ -268,6 +268,7 @@ impl<R: io::Read + io::Seek> PrefixIter<R> {
         PrefixIter { cursor, prefix, move_on_first_prefix: true }
     }
 
+    /// Returns the next entry that starts with the given prefix.
     pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
         let entry = if self.move_on_first_prefix {
             self.move_on_first_prefix = false;
@@ -308,6 +309,7 @@ impl<R: io::Read + io::Seek> RangeIter<R> {
         RangeIter { cursor, range: (start, end), move_on_start: true }
     }
 
+    /// Returns the next entry that is inside of the given range.
     pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
         let entry = if self.move_on_start {
             self.move_on_start = false;
