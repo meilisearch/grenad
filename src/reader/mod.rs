@@ -1,11 +1,13 @@
 use std::ops::{Bound, RangeBounds};
 use std::{io, mem};
 
+pub use self::prefix_iter::PrefixIter;
 pub use self::reader_cursor::ReaderCursor;
 use crate::block::{Block, BlockCursor};
 use crate::metadata::{FileVersion, Metadata};
 use crate::{CompressionType, Error};
 
+mod prefix_iter;
 mod reader_cursor;
 
 /// A struct that is able to read a grenad file that has been created by a [`crate::Writer`].
@@ -68,42 +70,6 @@ impl<R> Reader<R> {
     /// you must seek it back to the front to read it from the start.
     pub fn into_inner(self) -> R {
         self.reader
-    }
-}
-
-/// An iterator that is able to yield all the entries with
-/// a key that starts with a given prefix.
-#[derive(Clone)]
-pub struct PrefixIter<R> {
-    cursor: ReaderCursor<R>,
-    move_on_first_prefix: bool,
-    prefix: Vec<u8>,
-}
-
-impl<R: io::Read + io::Seek> PrefixIter<R> {
-    fn new(cursor: ReaderCursor<R>, prefix: Vec<u8>) -> PrefixIter<R> {
-        PrefixIter { cursor, prefix, move_on_first_prefix: true }
-    }
-
-    /// Returns the next entry that starts with the given prefix.
-    pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
-        let entry = if self.move_on_first_prefix {
-            self.move_on_first_prefix = false;
-            self.cursor.move_on_key_greater_than_or_equal_to(&self.prefix)?
-        } else {
-            self.cursor.move_on_next()?
-        };
-
-        match entry {
-            Some((key, val)) if key.starts_with(&self.prefix) => {
-                // This is a trick to make the compiler happy...
-                // https://github.com/rust-lang/rust/issues/47680
-                let key: &'static _ = unsafe { mem::transmute(key) };
-                let val: &'static _ = unsafe { mem::transmute(val) };
-                Ok(Some((key, val)))
-            }
-            _otherwise => Ok(None),
-        }
     }
 }
 
