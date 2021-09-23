@@ -2,7 +2,7 @@ use std::io;
 use std::ops::RangeBounds;
 
 pub use self::prefix_iter::{PrefixIter, RevPrefixIter};
-pub use self::range_iter::RangeIter;
+pub use self::range_iter::{RangeIter, RevRangeIter};
 pub use self::reader_cursor::ReaderCursor;
 use crate::block::{Block, BlockCursor};
 use crate::metadata::{FileVersion, Metadata};
@@ -47,6 +47,15 @@ impl<R: io::Read + io::Seek> Reader<R> {
         A: AsRef<[u8]>,
     {
         self.into_cursor().map(|cursor| RangeIter::new(cursor, range))
+    }
+
+    /// Converts this [`Reader`] into a [`RevRangeIter`].
+    pub fn into_rev_range_iter<S, A>(self, range: S) -> Result<RevRangeIter<R>, Error>
+    where
+        S: RangeBounds<A>,
+        A: AsRef<[u8]>,
+    {
+        self.into_cursor().map(|cursor| RevRangeIter::new(cursor, range))
     }
 }
 
