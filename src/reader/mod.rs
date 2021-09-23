@@ -1,7 +1,7 @@
 use std::io;
 use std::ops::RangeBounds;
 
-pub use self::prefix_iter::PrefixIter;
+pub use self::prefix_iter::{PrefixIter, RevPrefixIter};
 pub use self::range_iter::RangeIter;
 pub use self::reader_cursor::ReaderCursor;
 use crate::block::{Block, BlockCursor};
@@ -33,6 +33,11 @@ impl<R: io::Read + io::Seek> Reader<R> {
     /// Converts this [`Reader`] into a [`PrefixIter`].
     pub fn into_prefix_iter(self, prefix: Vec<u8>) -> Result<PrefixIter<R>, Error> {
         self.into_cursor().map(|cursor| PrefixIter::new(cursor, prefix))
+    }
+
+    /// Converts this [`Reader`] into a [`PrefixRevIter`].
+    pub fn into_rev_prefix_iter(self, prefix: Vec<u8>) -> Result<RevPrefixIter<R>, Error> {
+        self.into_cursor().map(|cursor| RevPrefixIter::new(cursor, prefix))
     }
 
     /// Converts this [`Reader`] into a [`RangeIter`].
