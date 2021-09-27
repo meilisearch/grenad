@@ -147,6 +147,7 @@ mod tests {
     use crate::Reader;
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn range_iter() {
         let mut writer = Writer::memory();
         let mut nums = BTreeSet::new();
@@ -183,6 +184,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn rev_range_iter() {
         let mut writer = Writer::memory();
         let mut nums = BTreeSet::new();

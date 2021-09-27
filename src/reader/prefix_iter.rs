@@ -103,6 +103,7 @@ mod tests {
     use crate::Reader;
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn simple_prefix() {
         let mut writer = Writer::memory();
         for x in (10..24000u32).step_by(3) {

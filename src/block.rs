@@ -264,6 +264,7 @@ mod tests {
     use crate::block_writer::BlockWriter;
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn simple() {
         let mut writer = BlockWriter::new();
 
@@ -291,6 +292,31 @@ mod tests {
     }
 
     #[test]
+    fn small_iter() {
+        let mut bb = BlockWriter::new();
+
+        for x in 0..500i32 {
+            let x = x.to_be_bytes();
+            bb.insert(&x, &x);
+        }
+        let buffer = bb.finish();
+        let mut final_buffer = Vec::new();
+        final_buffer.extend_from_slice(&(buffer.as_ref().len() as u64).to_be_bytes());
+        final_buffer.extend_from_slice(buffer.as_ref());
+
+        let block = Block::new(&mut &final_buffer[..], CompressionType::None).unwrap();
+        let mut cursor = block.into_cursor();
+        for n in 0..500i32 {
+            let (k, v) = cursor.move_on_next().unwrap();
+            let k = k.try_into().map(i32::from_be_bytes).unwrap();
+            let v = v.try_into().map(i32::from_be_bytes).unwrap();
+            assert_eq!(k, n);
+            assert_eq!(v, n);
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
     fn easy_iter() {
         let mut bb = BlockWriter::new();
 
@@ -315,6 +341,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn easy_rev_iter() {
         let mut bb = BlockWriter::new();
 
@@ -339,6 +366,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn easy_move_on_key_greater_than_or_equal() {
         let mut bb = BlockWriter::new();
         let mut nums = Vec::new();
@@ -374,6 +402,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn easy_move_on_key_lower_than_or_equal() {
         let mut bb = BlockWriter::new();
         let mut nums = Vec::new();

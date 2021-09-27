@@ -528,6 +528,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn simple_cursorvec() {
         let mut sorter = SorterBuilder::new(merge)
             .chunk_compression_type(CompressionType::Snappy)
@@ -556,6 +557,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn hard_cursorvec() {
         let mut sorter = SorterBuilder::new(merge)
             .dump_threshold(1024) // 1KiB

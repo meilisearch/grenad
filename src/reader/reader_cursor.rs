@@ -210,6 +210,7 @@ mod tests {
     use crate::writer::Writer;
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn no_compression() {
         let wb = Writer::builder();
         let mut writer = wb.build(Vec::new());
@@ -243,8 +244,9 @@ mod tests {
         assert_eq!(cursor.move_on_next().unwrap(), None);
     }
 
-    #[cfg(feature = "snappy")]
     #[test]
+    #[cfg_attr(miri, ignore)]
+    #[cfg(feature = "snappy")]
     fn snappy_compression() {
         let mut wb = Writer::builder();
         wb.compression_type(CompressionType::Snappy);
@@ -272,6 +274,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn easy_move_on_key_greater_than_or_equal() {
         let mut writer = Writer::memory();
         let mut nums = Vec::new();
@@ -310,6 +313,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn easy_move_on_key_lower_than_or_equal() {
         let mut writer = Writer::memory();
         let mut nums = Vec::new();

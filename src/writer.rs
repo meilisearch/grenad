@@ -237,6 +237,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn no_compression() {
         let wb = Writer::builder();
         let mut writer = wb.build(Vec::new());
@@ -250,8 +251,9 @@ mod tests {
         assert_ne!(bytes.len(), 0);
     }
 
-    #[cfg(feature = "snappy")]
     #[test]
+    #[cfg_attr(miri, ignore)]
+    #[cfg(feature = "snappy")]
     fn snappy_compression() {
         let mut wb = Writer::builder();
         wb.compression_type(CompressionType::Snappy);
