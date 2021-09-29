@@ -57,6 +57,7 @@ impl<R: io::Read + io::Seek> RangeIter<R> {
     }
 }
 
+/// An iterator that is able to yield all the entries lying in a specified range in reverse order.
 #[derive(Clone)]
 pub struct RevRangeIter<R> {
     cursor: ReaderCursor<R>,

@@ -35,7 +35,7 @@ impl<R: io::Read + io::Seek> Reader<R> {
         self.into_cursor().map(|cursor| PrefixIter::new(cursor, prefix))
     }
 
-    /// Converts this [`Reader`] into a [`PrefixRevIter`].
+    /// Converts this [`Reader`] into a [`RevPrefixIter`].
     pub fn into_rev_prefix_iter(self, prefix: Vec<u8>) -> Result<RevPrefixIter<R>, Error> {
         self.into_cursor().map(|cursor| RevPrefixIter::new(cursor, prefix))
     }
