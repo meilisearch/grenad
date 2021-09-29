@@ -190,6 +190,12 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
             None => Ok(None),
         }
     }
+
+    /// Moves the cursor on the entry with a key equal to the key specified and
+    /// returns the corresponding entry.
+    pub fn move_on_key_equal_to(&mut self, key: &[u8]) -> Result<Option<(&[u8], &[u8])>, Error> {
+        self.move_on_key_greater_than_or_equal_to(key).map(|opt| opt.filter(|(k, _)| *k == key))
+    }
 }
 
 impl<R> Deref for ReaderCursor<R> {
