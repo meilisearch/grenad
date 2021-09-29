@@ -152,10 +152,11 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
 
     /// Moves the cursor on the entry with a key lower than or equal to the
     /// specified one and returns the corresponding entry.
-    pub fn move_on_key_lower_than_or_equal_to(
+    pub fn move_on_key_lower_than_or_equal_to<A: AsRef<[u8]>>(
         &mut self,
-        target_key: &[u8],
+        target_key: A,
     ) -> Result<Option<(&[u8], &[u8])>, Error> {
+        let target_key = target_key.as_ref();
         match self.move_on_key_greater_than_or_equal_to(target_key)? {
             Some((key, val)) if key == target_key => {
                 // This is a trick to make the compiler happy...
@@ -171,12 +172,13 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
 
     /// Moves the cursor on the entry with a key greater than or equal to the
     /// specified one and returns the corresponding entry.
-    pub fn move_on_key_greater_than_or_equal_to(
+    pub fn move_on_key_greater_than_or_equal_to<A: AsRef<[u8]>>(
         &mut self,
-        key: &[u8],
+        key: A,
     ) -> Result<Option<(&[u8], &[u8])>, Error> {
         // We move on the block which has a key greater than or equal to the key we are
         // searching for as the key stored in the index block is the last key of the block.
+        let key = key.as_ref();
         match self.index_block_cursor.move_on_key_greater_than_or_equal_to(key) {
             Some((_, offset_bytes)) => {
                 let offset = offset_bytes.try_into().map(u64::from_be_bytes).unwrap();
@@ -193,7 +195,11 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
 
     /// Moves the cursor on the entry with a key equal to the key specified and
     /// returns the corresponding entry.
-    pub fn move_on_key_equal_to(&mut self, key: &[u8]) -> Result<Option<(&[u8], &[u8])>, Error> {
+    pub fn move_on_key_equal_to<A: AsRef<[u8]>>(
+        &mut self,
+        key: A,
+    ) -> Result<Option<(&[u8], &[u8])>, Error> {
+        let key = key.as_ref();
         self.move_on_key_greater_than_or_equal_to(key).map(|opt| opt.filter(|(k, _)| *k == key))
     }
 }
