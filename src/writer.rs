@@ -131,6 +131,13 @@ impl Writer<()> {
 }
 
 impl<W: io::Write> Writer<W> {
+    /// Gets a reference to the underlying writer.
+    pub fn as_ref(&self) -> &W {
+        self.writer.as_ref()
+    }
+}
+
+impl<W: io::Write> Writer<W> {
     /// Creates a [`Writer`] that will write into the provided [`io::Write`] type.
     pub fn new(writer: W) -> Writer<W> {
         WriterBuilder::new().build(writer)

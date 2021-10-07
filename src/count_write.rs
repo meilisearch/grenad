@@ -15,6 +15,11 @@ impl<W> CountWrite<W> {
     pub fn count(&self) -> u64 {
         self.count
     }
+
+    /// Gets a reference to the underlying writer.
+    pub fn as_ref(&self) -> &W {
+        &self.inner
+    }
 }
 
 impl<W: Write> CountWrite<W> {
