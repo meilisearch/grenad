@@ -220,7 +220,7 @@ impl<B: Borrow<Block>> BlockCursor<B> {
         let offsets = self.block.borrow().index_offsets();
         let result = offsets.binary_search_by_key(&key, |off| {
             let (key, _, _) = self.block.borrow().entry_at(*off as usize).unwrap();
-            &key
+            key
         });
 
         match result {

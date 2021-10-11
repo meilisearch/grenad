@@ -378,7 +378,7 @@ where
         self.entries.memory_usage() >= self.dump_threshold
     }
 
-    /// Returns the exact amount of bytes written to disk, the value can be trust,
+    /// Returns the exact amount of bytes written to disk, the value can be trusted,
     /// this is not an estimate.
     ///
     /// Writes the in-memory entries to disk, using the specify settings
@@ -432,7 +432,7 @@ where
         Ok(written_bytes)
     }
 
-    /// Returns the exact amount of bytes written to disk, the value can be trust,
+    /// Returns the exact amount of bytes written to disk, the value can be trusted,
     /// this is not an estimate.
     ///
     /// Merges all of the chunks into a final chunk that replaces them.
