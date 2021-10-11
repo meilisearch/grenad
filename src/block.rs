@@ -41,7 +41,9 @@ impl Block {
         Ok(block_reader)
     }
 
-    /// Returns `true` if it was able to read a new Block.
+    /// Reads a new block and stores it in the internal buffers.
+    ///
+    /// This block must not be used if an error occurs while reading from the reader.
     pub fn read_from<R: io::Read>(&mut self, reader: &mut R) -> Result<(), Error> {
         let block_len = reader.read_u64::<BigEndian>()?;
 
