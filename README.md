@@ -1,11 +1,13 @@
-This library provides different ways to sort, merge, write,
-and read key-value pairs efficiently.
+This library provides tools to sort, merge, write, and read immutable key-value pairs.
+The entries in the grenad files are _immutable_ and the only way to modify them is by _creating
+a new file_ with the changes.
 
-# Example: use the Writer and Reader structs
+# Example: Use the `Writer` and `Reader` structs
 
-You can use the [`Writer`] struct to store key-value pairs
-into the specified [`std::io::Write`] type. The [`Reader`] type
-can then be used to read the entries.
+You can use the [`Writer`] struct to store key-value pairs into the specified
+[`std::io::Write`] type. The [`Reader`] type can then be used to read the entries.
+
+The entries provided to the [`Writer`] struct must be given in lexicographic order.
 
 ```rust
 use std::io::Cursor;
@@ -14,24 +16,34 @@ use grenad::{Reader, Writer};
 
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 let mut writer = Writer::memory();
+
+// We insert our key-value pairs in lexicographic order.
 writer.insert("first-counter", 119_u32.to_ne_bytes())?;
 writer.insert("second-counter", 384_u32.to_ne_bytes())?;
 
 // We create a reader from our writer.
 let cursor = writer.into_inner().map(Cursor::new)?;
-let mut reader = Reader::new(cursor)?.into_cursor()?;
+let mut cursor = Reader::new(cursor)?.into_cursor()?;
 
 // We can see that the sum of u32s is valid here.
-assert_eq!(reader.move_on_next()?, Some((&b"first-counter"[..], &119_u32.to_ne_bytes()[..])));
-assert_eq!(reader.move_on_next()?, Some((&b"second-counter"[..], &384_u32.to_ne_bytes()[..])));
-assert_eq!(reader.move_on_next()?, None);
+assert_eq!(cursor.move_on_next()?, Some((&b"first-counter"[..], &119_u32.to_ne_bytes()[..])));
+assert_eq!(cursor.move_on_next()?, Some((&b"second-counter"[..], &384_u32.to_ne_bytes()[..])));
+assert_eq!(cursor.move_on_next()?, None);
+
+// We can also jum on any given entry.
+assert_eq!(cursor.move_on_key_greater_than_or_equal_to("first")?, Some((&b"first-counter"[..], &119_u32.to_ne_bytes()[..])));
+assert_eq!(cursor.move_on_key_equal_to("second-counter")?, Some((&b"second-counter"[..], &384_u32.to_ne_bytes()[..])));
+assert_eq!(cursor.move_on_key_lower_than_or_equal_to("abracadabra")?, None);
 # Ok(()) }
 ```
 
-# Example: use the Merger struct
+# Example: Use the `Merger` struct
 
 In this example we show how you can merge multiple [`Reader`]s
-by using a merge function when a conflict is encountered.
+by using a _merge function_ when a conflict is encountered.
+
+The entries yielded by the [`Merger`] struct are returned in lexicographic order,
+a good way to write them back into a new [`Writer`].
 
 ```rust
 use std::array::TryFromSliceError;
@@ -64,8 +76,8 @@ let mut writera = Writer::memory();
 let mut writerb = Writer::memory();
 let mut writerc = Writer::memory();
 
-// We insert our key-value pairs in order and
-// mix them between our writers.
+// We insert our key-value pairs in lexicographic order
+// and mix them between our writers.
 writera.insert("first-counter", 32_u32.to_ne_bytes())?;
 writera.insert("second-counter", 64_u32.to_ne_bytes())?;
 writerb.insert("first-counter", 23_u32.to_ne_bytes())?;
@@ -95,11 +107,14 @@ assert_eq!(iter.next()?, None);
 # Ok(()) }
 ```
 
-# Example: use the Sorter struct
+# Example: Use the `Sorter` struct
 
-In this example we show how by defining a merge function,
-you can insert multiple entries with the same key and output
-them in key-order.
+In this example we show how by defining a _merge function_, we can insert
+multiple entries with the same key and output them in lexicographic order.
+
+The [`Sorter`] accepts the entries in any given order, will reorder them in-memory and
+merge them with the _merge function_ when required. It is authorized to have a memory budget
+during its construction and will try to follow it as closely as possible.
 
 ```rust
 use std::array::TryFromSliceError;
@@ -145,6 +160,5 @@ let mut iter = sorter.into_stream_merger_iter()?;
 assert_eq!(iter.next()?, Some((&b"first-counter"[..], &119_u32.to_ne_bytes()[..])));
 assert_eq!(iter.next()?, Some((&b"second-counter"[..], &384_u32.to_ne_bytes()[..])));
 assert_eq!(iter.next()?, None);
-
 # Ok(()) }
 ```
