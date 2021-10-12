@@ -1,7 +1,7 @@
 use std::convert::TryInto;
+use std::io;
 use std::io::SeekFrom;
 use std::ops::Deref;
-use std::{io, mem};
 
 use crate::reader::{Block, BlockCursor};
 use crate::{Error, Reader};
@@ -112,10 +112,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
     pub fn move_on_next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
         match self.current_cursor.as_mut().map(BlockCursor::move_on_next) {
             Some(Some((key, val))) => {
-                // This is a trick to make the compiler happy...
-                // https://github.com/rust-lang/rust/issues/47680
-                let key: &'static _ = unsafe { mem::transmute(key) };
-                let val: &'static _ = unsafe { mem::transmute(val) };
+                let (key, val) = unsafe { crate::transmute_entry_to_static(key, val) };
                 Ok(Some((key, val)))
             }
             Some(None) => match self.next_block_from_index()?.map(Block::into_cursor) {
@@ -133,10 +130,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
     pub fn move_on_prev(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
         match self.current_cursor.as_mut().map(BlockCursor::move_on_prev) {
             Some(Some((key, val))) => {
-                // This is a trick to make the compiler happy...
-                // https://github.com/rust-lang/rust/issues/47680
-                let key: &'static _ = unsafe { mem::transmute(key) };
-                let val: &'static _ = unsafe { mem::transmute(val) };
+                let (key, val) = unsafe { crate::transmute_entry_to_static(key, val) };
                 Ok(Some((key, val)))
             }
             Some(None) => match self.prev_block_from_index()?.map(Block::into_cursor) {
@@ -159,10 +153,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
         let target_key = target_key.as_ref();
         match self.move_on_key_greater_than_or_equal_to(target_key)? {
             Some((key, val)) if key == target_key => {
-                // This is a trick to make the compiler happy...
-                // https://github.com/rust-lang/rust/issues/47680
-                let key: &'static _ = unsafe { mem::transmute(key) };
-                let val: &'static _ = unsafe { mem::transmute(val) };
+                let (key, val) = unsafe { crate::transmute_entry_to_static(key, val) };
                 Ok(Some((key, val)))
             }
             Some(_) => self.move_on_prev(),

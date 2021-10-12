@@ -1,5 +1,5 @@
+use std::io;
 use std::ops::{Bound, RangeBounds};
-use std::{io, mem};
 
 use crate::{Error, ReaderCursor};
 
@@ -46,10 +46,7 @@ impl<R: io::Read + io::Seek> RangeIter<R> {
 
         match entry {
             Some((key, val)) if end_contains(self.range.end_bound(), key) => {
-                // This is a trick to make the compiler happy...
-                // https://github.com/rust-lang/rust/issues/47680
-                let key: &'static _ = unsafe { mem::transmute(key) };
-                let val: &'static _ = unsafe { mem::transmute(val) };
+                let (key, val) = unsafe { crate::transmute_entry_to_static(key, val) };
                 Ok(Some((key, val)))
             }
             _otherwise => Ok(None),
@@ -98,10 +95,7 @@ impl<R: io::Read + io::Seek> RevRangeIter<R> {
 
         match entry {
             Some((key, val)) if start_contains(self.range.start_bound(), key) => {
-                // This is a trick to make the compiler happy...
-                // https://github.com/rust-lang/rust/issues/47680
-                let key: &'static _ = unsafe { mem::transmute(key) };
-                let val: &'static _ = unsafe { mem::transmute(val) };
+                let (key, val) = unsafe { crate::transmute_entry_to_static(key, val) };
                 Ok(Some((key, val)))
             }
             _otherwise => Ok(None),

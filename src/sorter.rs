@@ -1,6 +1,7 @@
 use std::alloc::{alloc, dealloc, Layout};
 use std::borrow::Cow;
 use std::convert::Infallible;
+#[cfg(feature = "tempfile")]
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::mem::{align_of, size_of};
