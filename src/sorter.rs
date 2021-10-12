@@ -8,6 +8,8 @@ use std::{cmp, io, ops, slice};
 
 use bytemuck::{cast_slice, cast_slice_mut, Pod, Zeroable};
 
+use crate::count_write::CountWrite;
+
 const INITIAL_SORTER_VEC_SIZE: usize = 131_072; // 128KB
 const DEFAULT_SORTER_MEMORY: usize = 1_073_741_824; // 1GB
 const MIN_SORTER_MEMORY: usize = 10_485_760; // 10MB
@@ -104,6 +106,7 @@ impl<MF, CC: ChunkCreator> SorterBuilder<MF, CC> {
         Sorter {
             chunks: Vec::new(),
             entries: Entries::with_capacity(capacity),
+            chunks_total_size: 0,
             allow_realloc: self.allow_realloc,
             dump_threshold: self.dump_threshold,
             max_nb_chunks: self.max_nb_chunks,
@@ -220,6 +223,15 @@ impl Entries {
         })
     }
 
+    /// Returns the approximative memory usage of the rough entries.
+    ///
+    /// This is a very bad estimate in the sense that it does not calculate the amount of
+    /// duplicate entries and the fact that entries can be compressed once dumped to disk.
+    /// This estimate will always be greater than the actual end space usage on disk.
+    pub fn estimated_entries_memory_usage(&self) -> usize {
+        self.memory_usage() - self.remaining()
+    }
+
     /// The remaining amount of bytes before we need to reallocate a new buffer.
     fn remaining(&self) -> usize {
         self.buffer.len() - self.entries_len - self.bounds_count * size_of::<EntryBound>()
@@ -300,6 +312,7 @@ impl Drop for EntryBoundAlignedBuffer {
 pub struct Sorter<MF, CC: ChunkCreator = DefaultChunkCreator> {
     chunks: Vec<CC::Chunk>,
     entries: Entries,
+    chunks_total_size: u64,
     allow_realloc: bool,
     dump_threshold: usize,
     max_nb_chunks: usize,
@@ -319,6 +332,16 @@ impl<MF> Sorter<MF, DefaultChunkCreator> {
     /// Creates a [`Sorter`] from a merge function, with the default parameters.
     pub fn new(merge: MF) -> Sorter<MF, DefaultChunkCreator> {
         SorterBuilder::new(merge).build()
+    }
+
+    /// A rough estimate of how much memory usage it will take on the disk once dumped to disk.
+    ///
+    /// This is a very bad estimate in the sense that it does not calculate the amount of
+    /// duplicate entries that are in the dumped chunks and neither the fact that the in-memory
+    /// buffer will likely be compressed once written to disk. This estimate will always
+    /// be greater than the actual end space usage on disk.
+    pub fn estimated_dumped_memory_usage(&self) -> u64 {
+        self.entries.estimated_entries_memory_usage() as u64 + self.chunks_total_size
     }
 }
 
@@ -341,10 +364,10 @@ where
         if self.entries.fits(key, val) || (!self.threshold_exceeded() && self.allow_realloc) {
             self.entries.insert(key, val);
         } else {
-            self.write_chunk()?;
+            self.chunks_total_size += self.write_chunk()?;
             self.entries.insert(key, val);
             if self.chunks.len() >= self.max_nb_chunks {
-                self.merge_chunks()?;
+                self.chunks_total_size = self.merge_chunks()?;
             }
         }
 
@@ -355,13 +378,23 @@ where
         self.entries.memory_usage() >= self.dump_threshold
     }
 
-    fn write_chunk(&mut self) -> Result<(), Error<U>> {
-        let chunk =
-            self.chunk_creator.create().map_err(Into::into).map_err(Error::convert_merge_error)?;
+    /// Returns the exact amount of bytes written to disk, the value can be trusted,
+    /// this is not an estimate.
+    ///
+    /// Writes the in-memory entries to disk, using the specify settings
+    /// to compress the block and entries. It clears the in-memory entries.
+    fn write_chunk(&mut self) -> Result<u64, Error<U>> {
+        let count_write_chunk = self
+            .chunk_creator
+            .create()
+            .map_err(Into::into)
+            .map_err(Error::convert_merge_error)
+            .map(CountWrite::new)?;
+
         let mut writer = WriterBuilder::new()
             .compression_type(self.chunk_compression_type)
             .compression_level(self.chunk_compression_level)
-            .build(chunk)?;
+            .build(count_write_chunk);
 
         self.entries.sort_unstable_by_key();
 
@@ -386,27 +419,43 @@ where
             writer.insert(&key, &merged_val)?;
         }
 
-        let chunk = writer.into_inner()?;
+        // We retrieve the wrapped CountWrite and extract
+        // the amount of bytes effectively written.
+        let mut count_write_chunk = writer.into_inner()?;
+        count_write_chunk.flush()?;
+        let written_bytes = count_write_chunk.count();
+        let chunk = count_write_chunk.into_inner()?;
+
         self.chunks.push(chunk);
         self.entries.clear();
 
-        Ok(())
+        Ok(written_bytes)
     }
 
-    fn merge_chunks(&mut self) -> Result<(), Error<U>> {
-        let chunk =
-            self.chunk_creator.create().map_err(Into::into).map_err(Error::convert_merge_error)?;
+    /// Returns the exact amount of bytes written to disk, the value can be trusted,
+    /// this is not an estimate.
+    ///
+    /// Merges all of the chunks into a final chunk that replaces them.
+    /// It uses the user provided merge function to resolve merge conflicts.
+    fn merge_chunks(&mut self) -> Result<u64, Error<U>> {
+        let count_write_chunk = self
+            .chunk_creator
+            .create()
+            .map_err(Into::into)
+            .map_err(Error::convert_merge_error)
+            .map(CountWrite::new)?;
+
         let mut writer = WriterBuilder::new()
             .compression_type(self.chunk_compression_type)
             .compression_level(self.chunk_compression_level)
-            .build(chunk)?;
+            .build(count_write_chunk);
 
         let sources: Result<Vec<_>, Error<U>> = self
             .chunks
             .drain(..)
             .map(|mut chunk| {
                 chunk.seek(SeekFrom::Start(0))?;
-                Reader::new(chunk).map_err(Error::convert_merge_error)
+                Reader::new(chunk).and_then(Reader::into_cursor).map_err(Error::convert_merge_error)
             })
             .collect();
 
@@ -415,20 +464,27 @@ where
         builder.extend(sources?);
         let merger = builder.build();
 
-        let mut iter = merger.into_merger_iter().map_err(Error::convert_merge_error)?;
+        let mut iter = merger.into_stream_merger_iter().map_err(Error::convert_merge_error)?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
         }
 
-        let chunk = writer.into_inner()?;
+        let mut count_write_chunk = writer.into_inner()?;
+        count_write_chunk.flush()?;
+        let written_bytes = count_write_chunk.count();
+        let chunk = count_write_chunk.into_inner()?;
+
         self.chunks.push(chunk);
 
-        Ok(())
+        Ok(written_bytes)
     }
 
     /// Consumes this [`Sorter`] and streams the entries to the [`Writer`] given in parameter.
-    pub fn write_into<W: io::Write>(self, writer: &mut Writer<W>) -> Result<(), Error<U>> {
-        let mut iter = self.into_merger_iter()?;
+    pub fn write_into_stream_writer<W: io::Write>(
+        self,
+        writer: &mut Writer<W>,
+    ) -> Result<(), Error<U>> {
+        let mut iter = self.into_stream_merger_iter()?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
         }
@@ -436,23 +492,23 @@ where
     }
 
     /// Consumes this [`Sorter`] and outputs a stream of the merged entries in key-order.
-    pub fn into_merger_iter(mut self) -> Result<MergerIter<CC::Chunk, MF>, Error<U>> {
+    pub fn into_stream_merger_iter(mut self) -> Result<MergerIter<CC::Chunk, MF>, Error<U>> {
         // Flush the pending unordered entries.
-        self.write_chunk()?;
+        self.chunks_total_size = self.write_chunk()?;
 
         let sources: Result<Vec<_>, Error<U>> = self
             .chunks
             .into_iter()
-            .map(|mut file| {
-                file.seek(SeekFrom::Start(0))?;
-                Reader::new(file).map_err(Error::convert_merge_error)
+            .map(|mut chunk| {
+                chunk.seek(SeekFrom::Start(0))?;
+                Reader::new(chunk).and_then(Reader::into_cursor).map_err(Error::convert_merge_error)
             })
             .collect();
 
         let mut builder = Merger::builder(self.merge);
         builder.extend(sources?);
 
-        builder.build().into_merger_iter().map_err(Error::convert_merge_error)
+        builder.build().into_stream_merger_iter().map_err(Error::convert_merge_error)
     }
 }
 
@@ -515,6 +571,7 @@ impl ChunkCreator for CursorVec {
 #[cfg(test)]
 mod tests {
     use std::convert::Infallible;
+    use std::io::Cursor;
     use std::iter::repeat;
 
     use super::*;
@@ -524,6 +581,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn simple_cursorvec() {
         let mut sorter = SorterBuilder::new(merge)
             .chunk_compression_type(CompressionType::Snappy)
@@ -536,11 +594,12 @@ mod tests {
         sorter.insert(b"abstract", "lol").unwrap();
 
         let mut bytes = WriterBuilder::new().memory();
-        sorter.write_into(&mut bytes).unwrap();
+        sorter.write_into_stream_writer(&mut bytes).unwrap();
         let bytes = bytes.into_inner().unwrap();
 
-        let mut reader = Reader::new(bytes.as_slice()).unwrap();
-        while let Some((key, val)) = reader.next().unwrap() {
+        let reader = Reader::new(Cursor::new(bytes.as_slice())).unwrap();
+        let mut cursor = reader.into_cursor().unwrap();
+        while let Some((key, val)) = cursor.move_on_next().unwrap() {
             match key {
                 b"hello" => assert_eq!(val, b"kiki"),
                 b"abstract" => assert_eq!(val, b"lollol"),
@@ -551,6 +610,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn hard_cursorvec() {
         let mut sorter = SorterBuilder::new(merge)
             .dump_threshold(1024) // 1KiB
@@ -567,13 +627,14 @@ mod tests {
         }
 
         let mut bytes = WriterBuilder::new().memory();
-        sorter.write_into(&mut bytes).unwrap();
+        sorter.write_into_stream_writer(&mut bytes).unwrap();
         let bytes = bytes.into_inner().unwrap();
 
-        let mut reader = Reader::new(bytes.as_slice()).unwrap();
-        let (key, val) = reader.next().unwrap().unwrap();
+        let reader = Reader::new(Cursor::new(bytes.as_slice())).unwrap();
+        let mut cursor = reader.into_cursor().unwrap();
+        let (key, val) = cursor.move_on_next().unwrap().unwrap();
         assert_eq!(key, b"hello");
         assert!(val.iter().eq(repeat(b"kiki").take(200).flatten()));
-        assert!(reader.next().unwrap().is_none());
+        assert!(cursor.move_on_next().unwrap().is_none());
     }
 }

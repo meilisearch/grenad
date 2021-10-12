@@ -1,7 +1,7 @@
 This library provides different ways to sort, merge, write,
 and read key-value pairs efficiently.
 
-## Example: use the Writer and Reader structs
+# Example: use the Writer and Reader structs
 
 You can use the [`Writer`] struct to store key-value pairs
 into the specified [`std::io::Write`] type. The [`Reader`] type
@@ -19,16 +19,16 @@ writer.insert("second-counter", 384_u32.to_ne_bytes())?;
 
 // We create a reader from our writer.
 let cursor = writer.into_inner().map(Cursor::new)?;
-let mut reader = Reader::new(cursor)?;
+let mut reader = Reader::new(cursor)?.into_cursor()?;
 
 // We can see that the sum of u32s is valid here.
-assert_eq!(reader.next()?, Some((&b"first-counter"[..], &119_u32.to_ne_bytes()[..])));
-assert_eq!(reader.next()?, Some((&b"second-counter"[..], &384_u32.to_ne_bytes()[..])));
-assert_eq!(reader.next()?, None);
+assert_eq!(reader.move_on_next()?, Some((&b"first-counter"[..], &119_u32.to_ne_bytes()[..])));
+assert_eq!(reader.move_on_next()?, Some((&b"second-counter"[..], &384_u32.to_ne_bytes()[..])));
+assert_eq!(reader.move_on_next()?, None);
 # Ok(()) }
 ```
 
-## Example: use the Merger struct
+# Example: use the Merger struct
 
 In this example we show how you can merge multiple [`Reader`]s
 by using a merge function when a conflict is encountered.
@@ -46,8 +46,8 @@ use grenad::{MergerBuilder, Reader, Writer};
 //  - wrapping sums them and,
 //  - outputs the result as native-endian bytes.
 fn wrapping_sum_u32s<'a>(
-    _key: &[u8],
-    values: &[Cow<'a, [u8]>],
+ _key: &[u8],
+ values: &[Cow<'a, [u8]>],
 ) -> Result<Cow<'a, [u8]>, TryFromSliceError>
 {
     let mut output: u32 = 0;
@@ -76,9 +76,9 @@ writerc.insert("first-counter", 64_u32.to_ne_bytes())?;
 let cursora = writera.into_inner().map(Cursor::new)?;
 let cursorb = writerb.into_inner().map(Cursor::new)?;
 let cursorc = writerc.into_inner().map(Cursor::new)?;
-let readera = Reader::new(cursora)?;
-let readerb = Reader::new(cursorb)?;
-let readerc = Reader::new(cursorc)?;
+let readera = Reader::new(cursora)?.into_cursor()?;
+let readerb = Reader::new(cursorb)?.into_cursor()?;
+let readerc = Reader::new(cursorc)?.into_cursor()?;
 
 // We create a merger that will sum our u32s when necessary,
 // and we add our readers to the list of readers to merge.
@@ -86,7 +86,7 @@ let merger_builder = MergerBuilder::new(wrapping_sum_u32s);
 let merger = merger_builder.add(readera).add(readerb).add(readerc).build();
 
 // We can iterate over the entries in key-order.
-let mut iter = merger.into_merger_iter()?;
+let mut iter = merger.into_stream_merger_iter()?;
 
 // We can see that the sum of u32s is valid here.
 assert_eq!(iter.next()?, Some((&b"first-counter"[..], &119_u32.to_ne_bytes()[..])));
@@ -95,7 +95,7 @@ assert_eq!(iter.next()?, None);
 # Ok(()) }
 ```
 
-## Example: use the Sorter struct
+# Example: use the Sorter struct
 
 In this example we show how by defining a merge function,
 you can insert multiple entries with the same key and output
@@ -113,8 +113,8 @@ use grenad::{CursorVec, SorterBuilder};
 //  - wrapping sums them and,
 //  - outputs the result as native-endian bytes.
 fn wrapping_sum_u32s<'a>(
-    _key: &[u8],
-    values: &[Cow<'a, [u8]>],
+ _key: &[u8],
+ values: &[Cow<'a, [u8]>],
 ) -> Result<Cow<'a, [u8]>, TryFromSliceError>
 {
     let mut output: u32 = 0;
@@ -139,7 +139,7 @@ sorter.insert("second-counter", 320_u32.to_ne_bytes())?;
 sorter.insert("second-counter", 64_u32.to_ne_bytes())?;
 
 // We can iterate over the entries in key-order.
-let mut iter = sorter.into_merger_iter()?;
+let mut iter = sorter.into_stream_merger_iter()?;
 
 // We can see that the sum of u32s is valid here.
 assert_eq!(iter.next()?, Some((&b"first-counter"[..], &119_u32.to_ne_bytes()[..])));

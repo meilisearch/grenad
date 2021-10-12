@@ -4,11 +4,11 @@ use std::collections::BinaryHeap;
 use std::io;
 use std::iter::once;
 
-use crate::{Error, Reader, Writer};
+use crate::{Error, ReaderCursor, Writer};
 
 /// A struct that is used to configure a [`Merger`] with the sources to merge.
 pub struct MergerBuilder<R, MF> {
-    sources: Vec<Reader<R>>,
+    sources: Vec<ReaderCursor<R>>,
     merge: MF,
 }
 
@@ -20,13 +20,13 @@ impl<R, MF> MergerBuilder<R, MF> {
     }
 
     /// Add a source to merge, this function can be chained.
-    pub fn add(mut self, source: Reader<R>) -> Self {
+    pub fn add(mut self, source: ReaderCursor<R>) -> Self {
         self.push(source);
         self
     }
 
     /// Push a source to merge, this function can be used in a loop.
-    pub fn push(&mut self, source: Reader<R>) {
+    pub fn push(&mut self, source: ReaderCursor<R>) {
         self.sources.push(source);
     }
 
@@ -36,20 +36,20 @@ impl<R, MF> MergerBuilder<R, MF> {
     }
 }
 
-impl<R, MF> Extend<Reader<R>> for MergerBuilder<R, MF> {
-    fn extend<T: IntoIterator<Item = Reader<R>>>(&mut self, iter: T) {
+impl<R, MF> Extend<ReaderCursor<R>> for MergerBuilder<R, MF> {
+    fn extend<T: IntoIterator<Item = ReaderCursor<R>>>(&mut self, iter: T) {
         self.sources.extend(iter);
     }
 }
 
 struct Entry<R> {
-    iter: Reader<R>,
+    cursor: ReaderCursor<R>,
 }
 
 impl<R> Ord for Entry<R> {
     fn cmp(&self, other: &Entry<R>) -> Ordering {
-        let skey = self.iter.current().map(|(k, _)| k);
-        let okey = other.iter.current().map(|(k, _)| k);
+        let skey = self.cursor.current().map(|(k, _)| k);
+        let okey = other.cursor.current().map(|(k, _)| k);
         skey.cmp(&okey).reverse()
     }
 }
@@ -71,7 +71,7 @@ impl<R> PartialOrd for Entry<R> {
 /// A struct you can use to merge entries from the sources by using the merge
 /// function provided to merge values when entries have the same key.
 pub struct Merger<R, MF> {
-    sources: Vec<Reader<R>>,
+    sources: Vec<ReaderCursor<R>>,
     merge: MF,
 }
 
@@ -83,13 +83,13 @@ impl<R, MF> Merger<R, MF> {
     }
 }
 
-impl<R: io::Read, MF> Merger<R, MF> {
+impl<R: io::Read + io::Seek, MF> Merger<R, MF> {
     /// Consumes this [`Merger`] and outputs a stream of the merged entries in key-order.
-    pub fn into_merger_iter(self) -> Result<MergerIter<R, MF>, Error> {
+    pub fn into_stream_merger_iter(self) -> Result<MergerIter<R, MF>, Error> {
         let mut heap = BinaryHeap::new();
         for mut source in self.sources {
-            if source.next()?.is_some() {
-                heap.push(Entry { iter: source });
+            if source.move_on_next()?.is_some() {
+                heap.push(Entry { cursor: source });
             }
         }
 
@@ -105,12 +105,15 @@ impl<R: io::Read, MF> Merger<R, MF> {
 
 impl<R, MF, U> Merger<R, MF>
 where
-    R: io::Read,
+    R: io::Read + io::Seek,
     MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
 {
     /// Consumes this [`Merger`] and streams the entries to the [`Writer`] given in parameter.
-    pub fn write_into<W: io::Write>(self, writer: &mut Writer<W>) -> Result<(), Error<U>> {
-        let mut iter = self.into_merger_iter().map_err(Error::convert_merge_error)?;
+    pub fn write_into_stream_writer<W: io::Write>(
+        self,
+        writer: &mut Writer<W>,
+    ) -> Result<(), Error<U>> {
+        let mut iter = self.into_stream_merger_iter().map_err(Error::convert_merge_error)?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
         }
@@ -130,7 +133,7 @@ pub struct MergerIter<R, MF> {
 
 impl<R, MF, U> MergerIter<R, MF>
 where
-    R: io::Read,
+    R: io::Read + io::Seek,
     MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
 {
     /// Yield the entries in key-order where values have been merged when needed.
@@ -140,14 +143,14 @@ where
             None => return Ok(None),
         };
 
-        let (first_key, first_value) = match first_entry.iter.current() {
+        let (first_key, first_value) = match first_entry.cursor.current() {
             Some((key, value)) => (key, value),
             None => return Ok(None),
         };
 
         self.tmp_entries.clear();
         while let Some(entry) = self.heap.peek() {
-            if let Some((key, _value)) = entry.iter.current() {
+            if let Some((key, _value)) = entry.cursor.current() {
                 if first_key == key {
                     if let Some(entry) = self.heap.pop() {
                         self.tmp_entries.push(entry);
@@ -159,7 +162,8 @@ where
         }
 
         // Extract the currently pointed values from the entries.
-        let other_values = self.tmp_entries.iter().filter_map(|e| e.iter.current().map(|(_, v)| v));
+        let other_values =
+            self.tmp_entries.iter().filter_map(|e| e.cursor.current().map(|(_, v)| v));
         let values: Vec<_> = once(first_value).chain(other_values).map(Cow::Borrowed).collect();
 
         match (self.merge)(&first_key, &values) {
@@ -179,7 +183,7 @@ where
 
         // Don't forget to put the entries back into the heap.
         for mut entry in once(first_entry).chain(self.tmp_entries.drain(..)) {
-            if entry.iter.next().map_err(Error::convert_merge_error)?.is_some() {
+            if entry.cursor.move_on_next().map_err(Error::convert_merge_error)?.is_some() {
                 self.heap.push(entry);
             }
         }

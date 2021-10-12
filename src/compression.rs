@@ -46,6 +46,12 @@ impl FromStr for CompressionType {
     }
 }
 
+impl Default for CompressionType {
+    fn default() -> CompressionType {
+        CompressionType::None
+    }
+}
+
 /// An invalid compression type have been read and the block can't be de/compressed.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InvalidCompressionType;
@@ -187,13 +193,14 @@ fn lz4_compress(_data: &[u8], _level: u32) -> io::Result<Cow<[u8]>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     #[cfg_attr(miri, ignore)]
     #[cfg(all(feature = "zlib", feature = "snappy", feature = "zstd", feature = "lz4"))]
     fn check_all_compressions() {
         use CompressionType::*;
+
+        use super::*;
 
         let data = "hello world this is my string!!!";
         for ctype in [None, Zlib, Snappy, Zstd, Lz4] {
