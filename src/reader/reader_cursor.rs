@@ -32,6 +32,11 @@ impl<R> ReaderCursor<R> {
     pub fn into_inner(self) -> R {
         self.reader.into_inner()
     }
+
+    /// Gets a reference to the underlying reader.
+    pub fn get_ref(&self) -> &R {
+        self.reader.get_ref()
+    }
 }
 
 impl<R: io::Read + io::Seek> ReaderCursor<R> {
