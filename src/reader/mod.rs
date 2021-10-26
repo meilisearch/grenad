@@ -87,4 +87,9 @@ impl<R> Reader<R> {
     pub fn into_inner(self) -> R {
         self.reader
     }
+
+    /// Gets a reference to the underlying reader.
+    pub fn get_ref(&self) -> &R {
+        &self.reader
+    }
 }
