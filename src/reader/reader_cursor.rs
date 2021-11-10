@@ -42,8 +42,9 @@ impl<R> ReaderCursor<R> {
 impl<R: io::Read + io::Seek> ReaderCursor<R> {
     /// Creates a new [`ReaderCursor`] by consumming a [`Reader`].
     pub(crate) fn new(mut reader: Reader<R>) -> Result<ReaderCursor<R>, Error> {
-        reader.reader.seek(SeekFrom::Start(reader.metadata.index_block_offset))?;
-        let index_block = Block::new(&mut reader.reader, reader.metadata.compression_type)?;
+        reader.reader.seek(SeekFrom::Start(reader.index_block_offset()))?;
+        let compression_type = reader.compression_type();
+        let index_block = Block::new(&mut reader.reader, compression_type)?;
         Ok(ReaderCursor {
             index_block_cursor: index_block.into_cursor(),
             current_cursor: None,
@@ -57,7 +58,8 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
             Some((_, offset_bytes)) => {
                 let offset = offset_bytes.try_into().map(u64::from_be_bytes).unwrap();
                 self.reader.reader.seek(SeekFrom::Start(offset))?;
-                Block::new(&mut self.reader.reader, self.reader.metadata.compression_type).map(Some)
+                let compression_type = self.reader.compression_type();
+                Block::new(&mut self.reader.reader, compression_type).map(Some)
             }
             None => Ok(None),
         }
@@ -69,7 +71,8 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
             Some((_, offset_bytes)) => {
                 let offset = offset_bytes.try_into().map(u64::from_be_bytes).unwrap();
                 self.reader.reader.seek(SeekFrom::Start(offset))?;
-                Block::new(&mut self.reader.reader, self.reader.metadata.compression_type).map(Some)
+                let compression_type = self.reader.compression_type();
+                Block::new(&mut self.reader.reader, compression_type).map(Some)
             }
             None => Ok(None),
         }
@@ -81,8 +84,9 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
             Some((_, offset_bytes)) => {
                 let offset = offset_bytes.try_into().map(u64::from_be_bytes).unwrap();
                 self.reader.reader.seek(SeekFrom::Start(offset))?;
+                let compression_type = self.reader.compression_type();
                 let current_cursor = self.current_cursor.insert(
-                    Block::new(&mut self.reader.reader, self.reader.metadata.compression_type)
+                    Block::new(&mut self.reader.reader, compression_type)
                         .map(Block::into_cursor)?,
                 );
                 Ok(current_cursor.move_on_first())
@@ -100,8 +104,9 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
             Some((_, offset_bytes)) => {
                 let offset = offset_bytes.try_into().map(u64::from_be_bytes).unwrap();
                 self.reader.reader.seek(SeekFrom::Start(offset))?;
+                let compression_type = self.reader.compression_type();
                 let current_cursor = self.current_cursor.insert(
-                    Block::new(&mut self.reader.reader, self.reader.metadata.compression_type)
+                    Block::new(&mut self.reader.reader, compression_type)
                         .map(Block::into_cursor)?,
                 );
                 Ok(current_cursor.move_on_last())
@@ -179,8 +184,9 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
             Some((_, offset_bytes)) => {
                 let offset = offset_bytes.try_into().map(u64::from_be_bytes).unwrap();
                 self.reader.reader.seek(SeekFrom::Start(offset))?;
+                let compression_type = self.reader.compression_type();
                 let current_cursor = self.current_cursor.insert(
-                    Block::new(&mut self.reader.reader, self.reader.metadata.compression_type)
+                    Block::new(&mut self.reader.reader, compression_type)
                         .map(Block::into_cursor)?,
                 );
                 Ok(current_cursor.move_on_key_greater_than_or_equal_to(key))

@@ -75,6 +75,11 @@ impl<R> Reader<R> {
         self.metadata.entries_count
     }
 
+    /// Returns the offset at which the index footer block starts in this file.
+    pub(crate) fn index_block_offset(&self) -> u64 {
+        self.metadata.index_block_offset
+    }
+
     /// Returns weither this file contains entries or is empty.
     pub fn is_empty(&self) -> bool {
         self.len() == 0

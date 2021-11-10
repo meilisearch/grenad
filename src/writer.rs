@@ -17,6 +17,7 @@ pub struct WriterBuilder {
     compression_type: CompressionType,
     compression_level: u32,
     index_key_interval: Option<NonZeroUsize>,
+    index_levels: u8,
     block_size: usize,
 }
 
@@ -26,6 +27,7 @@ impl Default for WriterBuilder {
             compression_type: CompressionType::None,
             compression_level: 0,
             index_key_interval: None,
+            index_levels: 0,
             block_size: DEFAULT_BLOCK_SIZE,
         }
     }
@@ -61,9 +63,22 @@ impl WriterBuilder {
     }
 
     /// The interval at which we store the index of a key in the
-    /// footer index, used to seek into a block.
+    /// index footer, used to seek into a block.
     pub fn index_key_interval(&mut self, interval: NonZeroUsize) -> &mut Self {
         self.index_key_interval = Some(interval);
+        self
+    }
+
+    /// The number of levels/indirection we will use to write the index footer.
+    ///
+    /// An indirection of 1 or 2 is sufficient to reduce the impact of
+    /// decompressing/reading a big index footer.
+    ///
+    /// The default is 0 which means that the index footer values directly
+    /// specifies the block where the requested entry can be found. The disavantage of this
+    /// is that the index block can be quite big and take time to be decompressed and read.
+    pub fn index_levels(&mut self, levels: u8) -> &mut Self {
+        self.index_levels = levels;
         self
     }
 
@@ -78,10 +93,11 @@ impl WriterBuilder {
         if let Some(interval) = self.index_key_interval {
             index_block_writer_builder.index_key_interval(interval);
         }
+        let index_block_writer = index_block_writer_builder.build();
 
         Writer {
             block_writer: block_writer_builder.build(),
-            index_block_writer: index_block_writer_builder.build(),
+            index_block_writers: vec![index_block_writer; self.index_levels as usize + 1],
             compression_type: self.compression_type,
             compression_level: self.compression_level,
             block_size: self.block_size,
@@ -91,7 +107,7 @@ impl WriterBuilder {
     }
 
     /// Creates the [`Writer`] that will write into a [`Vec`] of bytes.
-    pub fn memory(&mut self) -> Writer<Vec<u8>> {
+    pub fn memory(&self) -> Writer<Vec<u8>> {
         self.build(Vec::new())
     }
 }
@@ -101,9 +117,9 @@ impl WriterBuilder {
 pub struct Writer<W> {
     /// The block writer that is currently storing the key/values entries.
     block_writer: BlockWriter,
-    /// The block writer that associates the offset (big endian u64) of the
+    /// The block writers that associates the offset (big endian u64) of the
     /// blocks in the file with the last key of these given blocks.
-    index_block_writer: BlockWriter,
+    index_block_writers: Vec<BlockWriter>,
     /// The compression method used to compress individual blocks.
     compression_type: CompressionType,
     /// The compression level used to compress individual blocks.
@@ -112,7 +128,7 @@ pub struct Writer<W> {
     block_size: usize,
     /// The amount of key already inserted.
     entries_count: u64,
-    /// The writer in which we write the block, index block and footer metadata.
+    /// The writer in which we write the block, index footer blocks and footer metadata.
     writer: CountWrite<W>,
 }
 
@@ -214,6 +230,7 @@ impl<W: io::Write> Writer<W> {
             index_block_offset,
             compression_type: self.compression_type,
             entries_count: self.entries_count,
+            index_levels: 0,
         };
 
         metadata.write_into(&mut self.writer)?;
