@@ -41,8 +41,8 @@ impl WriterBuilder {
     }
 
     /// Defines the [`CompressionType`] that will be used to compress the writer blocks.
-    pub fn compression_type(&mut self, ctype: CompressionType) -> &mut Self {
-        self.compression_type = ctype;
+    pub fn compression_type(&mut self, compression_type: CompressionType) -> &mut Self {
+        self.compression_type = compression_type;
         self
     }
 
