@@ -644,4 +644,50 @@ mod tests {
             }
         }
     }
+
+    quickcheck! {
+        fn qc_compare_to_binary_search(nums: Vec<u32>, queries: Vec<u32>) -> bool {
+            let mut nums = nums;
+            nums.sort_unstable();
+            nums.dedup();
+
+            let mut writer = Writer::builder().index_levels(2).memory();
+            for &x in &nums {
+                let x = x.to_be_bytes();
+                writer.insert(&x, &x).unwrap();
+            }
+
+            let bytes = writer.into_inner().unwrap();
+            let reader = Reader::new(Cursor::new(bytes.as_slice())).unwrap();
+            let mut cursor = reader.into_cursor().unwrap();
+
+            for q in queries {
+                match nums.binary_search(&q) {
+                    Ok(i) => {
+                        let q = nums[i];
+                        let (k, _) = cursor
+                            .move_on_key_lower_than_or_equal_to(&q.to_be_bytes())
+                            .unwrap()
+                            .unwrap();
+                        let k = k.try_into().map(u32::from_be_bytes).unwrap();
+                        if k != q {
+                            return false;
+                        }
+                    }
+                    Err(i) => {
+                        let k = cursor
+                            .move_on_key_lower_than_or_equal_to(&q.to_be_bytes())
+                            .unwrap()
+                            .map(|(k, _)| k.try_into().map(u32::from_be_bytes).unwrap());
+                        let expected = i.checked_sub(1).and_then(|i| nums.get(i)).copied();
+                        if k != expected {
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            return true;
+        }
+    }
 }
