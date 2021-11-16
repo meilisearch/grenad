@@ -422,6 +422,17 @@ mod tests {
     use crate::writer::Writer;
 
     #[test]
+    fn simple_empty() {
+        let writer = Writer::builder().index_levels(2).memory();
+        let bytes = writer.into_inner().unwrap();
+        let reader = Reader::new(Cursor::new(bytes.as_slice())).unwrap();
+
+        let mut cursor = reader.into_cursor().unwrap();
+        let result = cursor.move_on_key_greater_than_or_equal_to(&[0, 0, 0, 0]).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
     #[cfg_attr(miri, ignore)]
     fn no_compression() {
         let wb = Writer::builder();
