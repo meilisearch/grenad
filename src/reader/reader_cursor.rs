@@ -657,6 +657,7 @@ mod tests {
     }
 
     quickcheck! {
+        #[cfg_attr(miri, ignore)]
         fn qc_compare_to_binary_search(nums: Vec<u32>, queries: Vec<u32>) -> bool {
             let mut nums = nums;
             nums.sort_unstable();
