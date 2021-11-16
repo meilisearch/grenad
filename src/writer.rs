@@ -72,10 +72,10 @@ impl WriterBuilder {
     /// The number of levels/indirection we will use to write the index footer.
     ///
     /// An indirection of 1 or 2 is sufficient to reduce the impact of
-    /// decompressing/reading a big index footer.
+    /// decompressing/reading the index block footer.
     ///
-    /// The default is 0 which means that the index footer values directly
-    /// specifies the block where the requested entry can be found. The disavantage of this
+    /// The default is 0 which means that the index block footer values directly specifies
+    /// the block where the requested data entries can be found. The disavantage of this
     /// is that the index block can be quite big and take time to be decompressed and read.
     pub fn index_levels(&mut self, levels: u8) -> &mut Self {
         self.index_levels = levels;
@@ -172,17 +172,44 @@ impl<W: io::Write> Writer<W> {
         if self.block_writer.current_size_estimate() >= self.block_size {
             // Only write a block if there is at least a key in it.
             if let Some(last_key) = self.block_writer.last_key() {
-                // Get the current offset and last key of the current block,
-                // write it in the index block writer.
-                let offset = self.writer.count();
-                self.index_block_writer.insert(last_key, &offset.to_be_bytes());
+                if let Some(index_block_writer) = self.index_block_writers.last_mut() {
+                    // Get the current offset and last key of the current block,
+                    // write it in the index block writer.
+                    let offset = self.writer.count();
+                    index_block_writer.insert(last_key, &offset.to_be_bytes());
 
-                compress_and_write_block(
-                    &mut self.writer,
-                    &mut self.block_writer,
-                    self.compression_type,
-                    self.compression_level,
-                )?;
+                    compress_and_write_block(
+                        &mut self.writer,
+                        &mut self.block_writer,
+                        self.compression_type,
+                        self.compression_level,
+                    )?;
+                }
+
+                // We iterate recursively on the index blocks and dumps the blocks that reached
+                // the size limit, saving the offsets in the parent block. We skip the first index
+                // block as it is the main one and must only be dumped at the end.
+                let mut index_block_writers = &mut self.index_block_writers.as_mut_slice()[1..];
+                while let Some((last_block_writer, head)) = index_block_writers.split_last_mut() {
+                    if last_block_writer.current_size_estimate() >= self.block_size {
+                        // Only write a block if there is at least a key in it.
+                        if let Some(last_key) = last_block_writer.last_key() {
+                            if let Some(index_block_writer) = head.last_mut() {
+                                let offset = self.writer.count();
+                                index_block_writer.insert(last_key, &offset.to_be_bytes());
+
+                                compress_and_write_block(
+                                    &mut self.writer,
+                                    last_block_writer,
+                                    self.compression_type,
+                                    self.compression_level,
+                                )?;
+                            }
+                        }
+                    }
+
+                    index_block_writers = head;
+                }
             }
         }
 
@@ -202,35 +229,67 @@ impl<W: io::Write> Writer<W> {
     pub fn into_inner(mut self) -> io::Result<W> {
         // Write the last block only if it is not empty.
         if let Some(last_key) = self.block_writer.last_key() {
-            // Get the current offset and last key of the current block,
-            // write it in the index block writer.
-            let offset = self.writer.count();
-            self.index_block_writer.insert(last_key, &offset.to_be_bytes());
+            if let Some(index_block_writer) = self.index_block_writers.last_mut() {
+                // Get the current offset and last key of the current block,
+                // write it in the index block writer.
+                let offset = self.writer.count();
+                index_block_writer.insert(last_key, &offset.to_be_bytes());
 
-            compress_and_write_block(
-                &mut self.writer,
-                &mut self.block_writer,
-                self.compression_type,
-                self.compression_level,
-            )?;
+                compress_and_write_block(
+                    &mut self.writer,
+                    &mut self.block_writer,
+                    self.compression_type,
+                    self.compression_level,
+                )?;
+            }
         }
 
-        // We must write the index block to the file.
-        let index_block_offset = self.writer.count();
-        compress_and_write_block(
-            &mut self.writer,
-            &mut self.index_block_writer,
-            self.compression_type,
-            self.compression_level,
-        )?;
+        // We must write the index block levels to the file.
+        let mut index_block_offset = self.writer.count();
+        let mut index_block_writers = self.index_block_writers.as_mut_slice();
+        while let Some((last_block_writer, head)) = index_block_writers.split_last_mut() {
+            // Get the offset where we are in the file.
+            index_block_offset = self.writer.count();
+
+            match last_block_writer.last_key() {
+                // Write the index block only if it is not empty.
+                Some(last_key) => {
+                    // Get the last_key of the index block we are writing and
+                    // put that last_key into the index block of the level above.
+                    if let Some(pre_last_block_writer) = head.last_mut() {
+                        pre_last_block_writer.insert(last_key, &index_block_offset.to_be_bytes());
+                    }
+
+                    compress_and_write_block(
+                        &mut self.writer,
+                        last_block_writer,
+                        self.compression_type,
+                        self.compression_level,
+                    )?;
+                }
+                // Or if this is the main index block.
+                None => {
+                    if head.is_empty() {
+                        compress_and_write_block(
+                            &mut self.writer,
+                            last_block_writer,
+                            self.compression_type,
+                            self.compression_level,
+                        )?;
+                    }
+                }
+            }
+
+            index_block_writers = head;
+        }
 
         // Then we can write the metadata that specify where the index block is stored.
         let metadata = Metadata {
-            file_version: FileVersion::FormatV1,
+            file_version: FileVersion::FormatV2,
             index_block_offset,
             compression_type: self.compression_type,
             entries_count: self.entries_count,
-            index_levels: 0,
+            index_levels: self.index_block_writers.len() as u8 - 1,
         };
 
         metadata.write_into(&mut self.writer)?;
@@ -264,6 +323,22 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn no_compression() {
         let wb = Writer::builder();
+        let mut writer = wb.build(Vec::new());
+
+        for x in 0..2000u32 {
+            let x = x.to_be_bytes();
+            writer.insert(&x, &x).unwrap();
+        }
+
+        let bytes = writer.into_inner().unwrap();
+        assert_ne!(bytes.len(), 0);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn no_compression_index_levels_2() {
+        let mut wb = Writer::builder();
+        wb.index_levels(2);
         let mut writer = wb.build(Vec::new());
 
         for x in 0..2000u32 {
