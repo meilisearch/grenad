@@ -65,13 +65,13 @@ impl<R: io::Read + io::Seek> RevPrefixIter<R> {
 }
 
 /// Moves the cursor on the last key that starts with the given prefix or before.
-fn move_on_last_prefix<'c, R: io::Read + io::Seek>(
-    cursor: &'c mut ReaderCursor<R>,
+fn move_on_last_prefix<R: io::Read + io::Seek>(
+    cursor: &mut ReaderCursor<R>,
     prefix: Vec<u8>,
-) -> Result<Option<(&'c [u8], &'c [u8])>, Error> {
+) -> Result<Option<(&[u8], &[u8])>, Error> {
     match advance_key(prefix) {
         Some(next_prefix) => match cursor.move_on_key_lower_than_or_equal_to(&next_prefix)? {
-            Some((k, _)) if k == &next_prefix => cursor.move_on_prev(),
+            Some((k, _)) if k == next_prefix => cursor.move_on_prev(),
             _otherwise => Ok(cursor.current()),
         },
         None => cursor.move_on_last(),

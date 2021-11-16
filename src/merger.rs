@@ -166,7 +166,7 @@ where
             self.tmp_entries.iter().filter_map(|e| e.cursor.current().map(|(_, v)| v));
         let values: Vec<_> = once(first_value).chain(other_values).map(Cow::Borrowed).collect();
 
-        match (self.merge)(&first_key, &values) {
+        match (self.merge)(first_key, &values) {
             Ok(value) => {
                 self.current_key.clear();
                 self.current_key.extend_from_slice(first_key);

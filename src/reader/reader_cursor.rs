@@ -311,7 +311,7 @@ impl IndexBlockCursor {
 
         // We return the position pointed by the last index block level.
         // The last index blocks exposes the offsets of the data blocks.
-        match self.inner.as_ref().map_or(None, |inner| inner.last()) {
+        match self.inner.as_ref().and_then(|inner| inner.last()) {
             Some((_, cursor)) => Ok(cursor.current()),
             None => Ok(None),
         }

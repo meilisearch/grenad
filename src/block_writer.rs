@@ -151,7 +151,7 @@ impl Deref for BlockBuffer<'_> {
     type Target = BlockWriter;
 
     fn deref(&self) -> &Self::Target {
-        &self.block_builder
+        self.block_builder
     }
 }
 
