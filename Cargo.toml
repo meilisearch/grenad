@@ -21,6 +21,7 @@ zstd = { version = "0.5.1", optional = true }
 criterion = { version = "0.3", features = ["html_reports"] }
 quickcheck = "0.9"
 rand = "0.8.4"
+grenad-0-4 = { version = "0.4.1", package = "grenad" }
 
 [[bench]]
 name = "index-levels"

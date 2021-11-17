@@ -283,7 +283,7 @@ impl<W: io::Write> Writer<W> {
             index_block_writers = head;
         }
 
-        // Then we can write the metadata that specify where the index block is stored.
+        // Then we can write the metadata that specifies where the index block is stored.
         let metadata = Metadata {
             file_version: FileVersion::FormatV2,
             index_block_offset,
@@ -317,7 +317,10 @@ fn compress_and_write_block<W: io::Write>(
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
     use super::*;
+    use crate::Reader;
 
     #[test]
     #[cfg_attr(miri, ignore)]
@@ -365,5 +368,47 @@ mod tests {
 
         let bytes = writer.into_inner().unwrap();
         assert_ne!(bytes.len(), 0);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    #[cfg(feature = "snappy")]
+    fn backward_compatibility_0_4_snappy_compression() {
+        let mut writer = grenad_0_4::Writer::builder()
+            .compression_type(grenad_0_4::CompressionType::Snappy)
+            .memory();
+
+        let total: u32 = 156_000;
+
+        for x in 0..total {
+            let x = x.to_be_bytes();
+            writer.insert(&x, &x).unwrap();
+        }
+
+        let bytes = writer.into_inner().unwrap();
+        assert_ne!(bytes.len(), 0);
+
+        let reader = Reader::new(Cursor::new(bytes.as_slice())).unwrap();
+        let mut cursor = reader.into_cursor().unwrap();
+        let mut x = 0u32;
+
+        while let Some((k, v)) = cursor.move_on_next().unwrap() {
+            let k = k.try_into().map(u32::from_be_bytes).unwrap();
+            let v = v.try_into().map(u32::from_be_bytes).unwrap();
+            assert_eq!(k, x);
+            assert_eq!(v, x);
+            x += 1;
+        }
+
+        for x in 0..total {
+            let (k, v) =
+                cursor.move_on_key_greater_than_or_equal_to(x.to_be_bytes()).unwrap().unwrap();
+            let k = k.try_into().map(u32::from_be_bytes).unwrap();
+            let v = v.try_into().map(u32::from_be_bytes).unwrap();
+            assert_eq!(k, x);
+            assert_eq!(v, x);
+        }
+
+        assert_eq!(x, total);
     }
 }
