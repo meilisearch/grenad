@@ -1,4 +1,4 @@
-use std::borrow::{Borrow, Cow};
+use std::borrow::Borrow;
 use std::convert::TryInto;
 use std::io;
 use std::mem::{self, size_of};
@@ -44,17 +44,13 @@ impl Block {
     /// Reads a new block and stores it in the internal buffers.
     ///
     /// This block must not be used if an error occurs while reading from the reader.
-    pub fn read_from<R: io::Read>(&mut self, reader: &mut R) -> Result<(), Error> {
+    pub fn read_from<R: io::Read>(&mut self, mut reader: R) -> Result<(), Error> {
         let block_len = reader.read_u64::<BigEndian>()?;
 
-        // We reset the cursor's position and decompress
-        // the block into the cursor's buffer.
-        self.buffer.resize(block_len as usize, 0);
-        reader.read_exact(&mut self.buffer)?;
-
-        if let Cow::Owned(vec) = decompress(self.compression_type, &self.buffer)? {
-            self.buffer = vec;
-        }
+        // We limit the amount of bytes that the decompress function is
+        // allowed to read and give it the buffer to decompress into it.
+        self.buffer.clear();
+        decompress(self.compression_type, reader.take(block_len), &mut self.buffer)?;
 
         // We retrieve the size of the index footer, the footer and
         // then compute the size of the payload.
