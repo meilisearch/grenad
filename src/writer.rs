@@ -9,8 +9,8 @@ use crate::compression::{compress, CompressionType};
 use crate::count_write::CountWrite;
 use crate::metadata::{FileVersion, Metadata};
 
-pub const DEFAULT_BLOCK_SIZE: usize = 8192;
-pub const MIN_BLOCK_SIZE: usize = 1024;
+const DEFAULT_BLOCK_SIZE: usize = 8192;
+const MIN_BLOCK_SIZE: usize = 1024;
 
 /// A struct that is used to configure a [`Writer`].
 pub struct WriterBuilder {
