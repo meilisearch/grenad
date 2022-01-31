@@ -17,6 +17,7 @@ pub struct WriterBuilder {
     compression_type: CompressionType,
     compression_level: u32,
     index_key_interval: Option<NonZeroUsize>,
+    index_levels: u8,
     block_size: usize,
 }
 
@@ -26,6 +27,7 @@ impl Default for WriterBuilder {
             compression_type: CompressionType::None,
             compression_level: 0,
             index_key_interval: None,
+            index_levels: 0,
             block_size: DEFAULT_BLOCK_SIZE,
         }
     }
@@ -39,8 +41,8 @@ impl WriterBuilder {
     }
 
     /// Defines the [`CompressionType`] that will be used to compress the writer blocks.
-    pub fn compression_type(&mut self, ctype: CompressionType) -> &mut Self {
-        self.compression_type = ctype;
+    pub fn compression_type(&mut self, compression_type: CompressionType) -> &mut Self {
+        self.compression_type = compression_type;
         self
     }
 
@@ -61,9 +63,22 @@ impl WriterBuilder {
     }
 
     /// The interval at which we store the index of a key in the
-    /// footer index, used to seek into a block.
+    /// index footer, used to seek into a block.
     pub fn index_key_interval(&mut self, interval: NonZeroUsize) -> &mut Self {
         self.index_key_interval = Some(interval);
+        self
+    }
+
+    /// The number of levels/indirection we will use to write the index footer.
+    ///
+    /// An indirection of 1 or 2 is sufficient to reduce the impact of
+    /// decompressing/reading the index block footer.
+    ///
+    /// The default is 0 which means that the index block footer values directly specifies
+    /// the block where the requested data entries can be found. The disavantage of this
+    /// is that the index block can be quite big and take time to be decompressed and read.
+    pub fn index_levels(&mut self, levels: u8) -> &mut Self {
+        self.index_levels = levels;
         self
     }
 
@@ -78,10 +93,11 @@ impl WriterBuilder {
         if let Some(interval) = self.index_key_interval {
             index_block_writer_builder.index_key_interval(interval);
         }
+        let index_block_writer = index_block_writer_builder.build();
 
         Writer {
             block_writer: block_writer_builder.build(),
-            index_block_writer: index_block_writer_builder.build(),
+            index_block_writers: vec![index_block_writer; self.index_levels as usize + 1],
             compression_type: self.compression_type,
             compression_level: self.compression_level,
             block_size: self.block_size,
@@ -91,7 +107,7 @@ impl WriterBuilder {
     }
 
     /// Creates the [`Writer`] that will write into a [`Vec`] of bytes.
-    pub fn memory(&mut self) -> Writer<Vec<u8>> {
+    pub fn memory(&self) -> Writer<Vec<u8>> {
         self.build(Vec::new())
     }
 }
@@ -101,9 +117,9 @@ impl WriterBuilder {
 pub struct Writer<W> {
     /// The block writer that is currently storing the key/values entries.
     block_writer: BlockWriter,
-    /// The block writer that associates the offset (big endian u64) of the
+    /// The block writers that associates the offset (big endian u64) of the
     /// blocks in the file with the last key of these given blocks.
-    index_block_writer: BlockWriter,
+    index_block_writers: Vec<BlockWriter>,
     /// The compression method used to compress individual blocks.
     compression_type: CompressionType,
     /// The compression level used to compress individual blocks.
@@ -112,7 +128,7 @@ pub struct Writer<W> {
     block_size: usize,
     /// The amount of key already inserted.
     entries_count: u64,
-    /// The writer in which we write the block, index block and footer metadata.
+    /// The writer in which we write the block, index footer blocks and footer metadata.
     writer: CountWrite<W>,
 }
 
@@ -156,17 +172,44 @@ impl<W: io::Write> Writer<W> {
         if self.block_writer.current_size_estimate() >= self.block_size {
             // Only write a block if there is at least a key in it.
             if let Some(last_key) = self.block_writer.last_key() {
-                // Get the current offset and last key of the current block,
-                // write it in the index block writer.
-                let offset = self.writer.count();
-                self.index_block_writer.insert(last_key, &offset.to_be_bytes());
+                if let Some(index_block_writer) = self.index_block_writers.last_mut() {
+                    // Get the current offset and last key of the current block,
+                    // write it in the index block writer.
+                    let offset = self.writer.count();
+                    index_block_writer.insert(last_key, &offset.to_be_bytes());
 
-                compress_and_write_block(
-                    &mut self.writer,
-                    &mut self.block_writer,
-                    self.compression_type,
-                    self.compression_level,
-                )?;
+                    compress_and_write_block(
+                        &mut self.writer,
+                        &mut self.block_writer,
+                        self.compression_type,
+                        self.compression_level,
+                    )?;
+                }
+
+                // We iterate recursively on the index blocks and dumps the blocks that reached
+                // the size limit, saving the offsets in the parent block. We skip the first index
+                // block as it is the main one and must only be dumped at the end.
+                let mut index_block_writers = &mut self.index_block_writers.as_mut_slice()[1..];
+                while let Some((last_block_writer, head)) = index_block_writers.split_last_mut() {
+                    if last_block_writer.current_size_estimate() >= self.block_size {
+                        // Only write a block if there is at least a key in it.
+                        if let Some(last_key) = last_block_writer.last_key() {
+                            if let Some(index_block_writer) = head.last_mut() {
+                                let offset = self.writer.count();
+                                index_block_writer.insert(last_key, &offset.to_be_bytes());
+
+                                compress_and_write_block(
+                                    &mut self.writer,
+                                    last_block_writer,
+                                    self.compression_type,
+                                    self.compression_level,
+                                )?;
+                            }
+                        }
+                    }
+
+                    index_block_writers = head;
+                }
             }
         }
 
@@ -186,34 +229,67 @@ impl<W: io::Write> Writer<W> {
     pub fn into_inner(mut self) -> io::Result<W> {
         // Write the last block only if it is not empty.
         if let Some(last_key) = self.block_writer.last_key() {
-            // Get the current offset and last key of the current block,
-            // write it in the index block writer.
-            let offset = self.writer.count();
-            self.index_block_writer.insert(last_key, &offset.to_be_bytes());
+            if let Some(index_block_writer) = self.index_block_writers.last_mut() {
+                // Get the current offset and last key of the current block,
+                // write it in the index block writer.
+                let offset = self.writer.count();
+                index_block_writer.insert(last_key, &offset.to_be_bytes());
 
-            compress_and_write_block(
-                &mut self.writer,
-                &mut self.block_writer,
-                self.compression_type,
-                self.compression_level,
-            )?;
+                compress_and_write_block(
+                    &mut self.writer,
+                    &mut self.block_writer,
+                    self.compression_type,
+                    self.compression_level,
+                )?;
+            }
         }
 
-        // We must write the index block to the file.
-        let index_block_offset = self.writer.count();
-        compress_and_write_block(
-            &mut self.writer,
-            &mut self.index_block_writer,
-            self.compression_type,
-            self.compression_level,
-        )?;
+        // We must write the index block levels to the file.
+        let mut index_block_offset = self.writer.count();
+        let mut index_block_writers = self.index_block_writers.as_mut_slice();
+        while let Some((last_block_writer, head)) = index_block_writers.split_last_mut() {
+            // Get the offset where we are in the file.
+            index_block_offset = self.writer.count();
 
-        // Then we can write the metadata that specify where the index block is stored.
+            match last_block_writer.last_key() {
+                // Write the index block only if it is not empty.
+                Some(last_key) => {
+                    // Get the last_key of the index block we are writing and
+                    // put that last_key into the index block of the level above.
+                    if let Some(pre_last_block_writer) = head.last_mut() {
+                        pre_last_block_writer.insert(last_key, &index_block_offset.to_be_bytes());
+                    }
+
+                    compress_and_write_block(
+                        &mut self.writer,
+                        last_block_writer,
+                        self.compression_type,
+                        self.compression_level,
+                    )?;
+                }
+                // Or if this is the main index block.
+                None => {
+                    if head.is_empty() {
+                        compress_and_write_block(
+                            &mut self.writer,
+                            last_block_writer,
+                            self.compression_type,
+                            self.compression_level,
+                        )?;
+                    }
+                }
+            }
+
+            index_block_writers = head;
+        }
+
+        // Then we can write the metadata that specifies where the index block is stored.
         let metadata = Metadata {
-            file_version: FileVersion::FormatV1,
+            file_version: FileVersion::FormatV2,
             index_block_offset,
             compression_type: self.compression_type,
             entries_count: self.entries_count,
+            index_levels: self.index_block_writers.len() as u8 - 1,
         };
 
         metadata.write_into(&mut self.writer)?;
@@ -241,12 +317,31 @@ fn compress_and_write_block<W: io::Write>(
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
     use super::*;
+    use crate::Reader;
 
     #[test]
     #[cfg_attr(miri, ignore)]
     fn no_compression() {
         let wb = Writer::builder();
+        let mut writer = wb.build(Vec::new());
+
+        for x in 0..2000u32 {
+            let x = x.to_be_bytes();
+            writer.insert(&x, &x).unwrap();
+        }
+
+        let bytes = writer.into_inner().unwrap();
+        assert_ne!(bytes.len(), 0);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn no_compression_index_levels_2() {
+        let mut wb = Writer::builder();
+        wb.index_levels(2);
         let mut writer = wb.build(Vec::new());
 
         for x in 0..2000u32 {
@@ -273,5 +368,47 @@ mod tests {
 
         let bytes = writer.into_inner().unwrap();
         assert_ne!(bytes.len(), 0);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    #[cfg(feature = "snappy")]
+    fn backward_compatibility_0_4_snappy_compression() {
+        let mut writer = grenad_0_4::Writer::builder()
+            .compression_type(grenad_0_4::CompressionType::Snappy)
+            .memory();
+
+        let total: u32 = 156_000;
+
+        for x in 0..total {
+            let x = x.to_be_bytes();
+            writer.insert(&x, &x).unwrap();
+        }
+
+        let bytes = writer.into_inner().unwrap();
+        assert_ne!(bytes.len(), 0);
+
+        let reader = Reader::new(Cursor::new(bytes.as_slice())).unwrap();
+        let mut cursor = reader.into_cursor().unwrap();
+        let mut x = 0u32;
+
+        while let Some((k, v)) = cursor.move_on_next().unwrap() {
+            let k = k.try_into().map(u32::from_be_bytes).unwrap();
+            let v = v.try_into().map(u32::from_be_bytes).unwrap();
+            assert_eq!(k, x);
+            assert_eq!(v, x);
+            x += 1;
+        }
+
+        for x in 0..total {
+            let (k, v) =
+                cursor.move_on_key_greater_than_or_equal_to(x.to_be_bytes()).unwrap().unwrap();
+            let k = k.try_into().map(u32::from_be_bytes).unwrap();
+            let v = v.try_into().map(u32::from_be_bytes).unwrap();
+            assert_eq!(k, x);
+            assert_eq!(v, x);
+        }
+
+        assert_eq!(x, total);
     }
 }

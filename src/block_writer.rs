@@ -46,6 +46,7 @@ impl Default for BlockWriterBuilder {
 /// The key values are appended one after the other in the block, these entries are
 /// followed by an index that indicates the offset of some of the keys. This footer
 /// index stores an offset every `index_key_interval`.
+#[derive(Clone)]
 pub struct BlockWriter {
     /// The buffer in which we store the indexed bytes.
     /// It contains the key, values and the footer index.
@@ -150,7 +151,7 @@ impl Deref for BlockBuffer<'_> {
     type Target = BlockWriter;
 
     fn deref(&self) -> &Self::Target {
-        &self.block_builder
+        self.block_builder
     }
 }
 

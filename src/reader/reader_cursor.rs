@@ -4,12 +4,12 @@ use std::io::SeekFrom;
 use std::ops::Deref;
 
 use crate::reader::{Block, BlockCursor};
-use crate::{Error, Reader};
+use crate::{CompressionType, Error, Reader};
 
 /// A cursor that can move forward backward and move on a specified key.
 #[derive(Clone)]
 pub struct ReaderCursor<R> {
-    index_block_cursor: BlockCursor<Block>,
+    index_block_cursor: IndexBlockCursor,
     current_cursor: Option<BlockCursor<Block>>,
     reader: Reader<R>,
 }
@@ -41,11 +41,13 @@ impl<R> ReaderCursor<R> {
 
 impl<R: io::Read + io::Seek> ReaderCursor<R> {
     /// Creates a new [`ReaderCursor`] by consumming a [`Reader`].
-    pub(crate) fn new(mut reader: Reader<R>) -> Result<ReaderCursor<R>, Error> {
-        reader.reader.seek(SeekFrom::Start(reader.metadata.index_block_offset))?;
-        let index_block = Block::new(&mut reader.reader, reader.metadata.compression_type)?;
+    pub(crate) fn new(reader: Reader<R>) -> Result<ReaderCursor<R>, Error> {
         Ok(ReaderCursor {
-            index_block_cursor: index_block.into_cursor(),
+            index_block_cursor: IndexBlockCursor::new(
+                reader.index_block_offset(),
+                reader.compression_type(),
+                reader.index_levels(),
+            ),
             current_cursor: None,
             reader,
         })
@@ -53,11 +55,12 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
 
     /// Returns the block containing the entries that is following the current one.
     pub(crate) fn next_block_from_index(&mut self) -> Result<Option<Block>, Error> {
-        match self.index_block_cursor.move_on_next() {
+        match self.index_block_cursor.move_on_next(&mut self.reader.reader)? {
             Some((_, offset_bytes)) => {
                 let offset = offset_bytes.try_into().map(u64::from_be_bytes).unwrap();
                 self.reader.reader.seek(SeekFrom::Start(offset))?;
-                Block::new(&mut self.reader.reader, self.reader.metadata.compression_type).map(Some)
+                let compression_type = self.reader.compression_type();
+                Block::new(&mut self.reader.reader, compression_type).map(Some)
             }
             None => Ok(None),
         }
@@ -65,11 +68,12 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
 
     /// Returns the block containing the entries that is preceding the current one.
     pub(crate) fn prev_block_from_index(&mut self) -> Result<Option<Block>, Error> {
-        match self.index_block_cursor.move_on_prev() {
+        match self.index_block_cursor.move_on_prev(&mut self.reader.reader)? {
             Some((_, offset_bytes)) => {
                 let offset = offset_bytes.try_into().map(u64::from_be_bytes).unwrap();
                 self.reader.reader.seek(SeekFrom::Start(offset))?;
-                Block::new(&mut self.reader.reader, self.reader.metadata.compression_type).map(Some)
+                let compression_type = self.reader.compression_type();
+                Block::new(&mut self.reader.reader, compression_type).map(Some)
             }
             None => Ok(None),
         }
@@ -77,12 +81,13 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
 
     /// Moves the cursor on the first entry and returns it.
     pub fn move_on_first(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
-        match self.index_block_cursor.move_on_first() {
+        match self.index_block_cursor.move_on_first(&mut self.reader.reader)? {
             Some((_, offset_bytes)) => {
                 let offset = offset_bytes.try_into().map(u64::from_be_bytes).unwrap();
                 self.reader.reader.seek(SeekFrom::Start(offset))?;
+                let compression_type = self.reader.compression_type();
                 let current_cursor = self.current_cursor.insert(
-                    Block::new(&mut self.reader.reader, self.reader.metadata.compression_type)
+                    Block::new(&mut self.reader.reader, compression_type)
                         .map(Block::into_cursor)?,
                 );
                 Ok(current_cursor.move_on_first())
@@ -96,12 +101,13 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
 
     /// Moves the cursor on the last entry and returns it.
     pub fn move_on_last(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
-        match self.index_block_cursor.move_on_last() {
+        match self.index_block_cursor.move_on_last(&mut self.reader.reader)? {
             Some((_, offset_bytes)) => {
                 let offset = offset_bytes.try_into().map(u64::from_be_bytes).unwrap();
                 self.reader.reader.seek(SeekFrom::Start(offset))?;
+                let compression_type = self.reader.compression_type();
                 let current_cursor = self.current_cursor.insert(
-                    Block::new(&mut self.reader.reader, self.reader.metadata.compression_type)
+                    Block::new(&mut self.reader.reader, compression_type)
                         .map(Block::into_cursor)?,
                 );
                 Ok(current_cursor.move_on_last())
@@ -175,12 +181,16 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
         // We move on the block which has a key greater than or equal to the key we are
         // searching for as the key stored in the index block is the last key of the block.
         let key = key.as_ref();
-        match self.index_block_cursor.move_on_key_greater_than_or_equal_to(key) {
+        match self
+            .index_block_cursor
+            .move_on_key_greater_than_or_equal_to(key, &mut self.reader.reader)?
+        {
             Some((_, offset_bytes)) => {
                 let offset = offset_bytes.try_into().map(u64::from_be_bytes).unwrap();
                 self.reader.reader.seek(SeekFrom::Start(offset))?;
+                let compression_type = self.reader.compression_type();
                 let current_cursor = self.current_cursor.insert(
-                    Block::new(&mut self.reader.reader, self.reader.metadata.compression_type)
+                    Block::new(&mut self.reader.reader, compression_type)
                         .map(Block::into_cursor)?,
                 );
                 Ok(current_cursor.move_on_key_greater_than_or_equal_to(key))
@@ -208,6 +218,200 @@ impl<R> Deref for ReaderCursor<R> {
     }
 }
 
+/// Represent an n-depth index block cursor.
+#[derive(Clone)]
+struct IndexBlockCursor {
+    base_block_offset: u64,
+    compression_type: CompressionType,
+    index_levels: u8,
+    /// Defines the different index block cursor for each depth,
+    /// associated with the offset at which it has been retrieved.
+    /// The length of it must be index_levels + 1 once initialized.
+    inner: Option<Vec<(u64, BlockCursor<Block>)>>,
+}
+
+impl IndexBlockCursor {
+    fn new(
+        base_block_offset: u64,
+        compression_type: CompressionType,
+        index_levels: u8,
+    ) -> IndexBlockCursor {
+        IndexBlockCursor { base_block_offset, compression_type, index_levels, inner: None }
+    }
+
+    fn move_on_first<R: io::Read + io::Seek>(
+        &mut self,
+        reader: R,
+    ) -> Result<Option<(&[u8], &[u8])>, Error> {
+        self.iter_index_blocks(reader, |c| c.move_on_first())
+    }
+
+    fn move_on_last<R: io::Read + io::Seek>(
+        &mut self,
+        reader: R,
+    ) -> Result<Option<(&[u8], &[u8])>, Error> {
+        self.iter_index_blocks(reader, |c| c.move_on_last())
+    }
+
+    fn move_on_next<R: io::Read + io::Seek>(
+        &mut self,
+        reader: R,
+    ) -> Result<Option<(&[u8], &[u8])>, Error> {
+        self.recursive_index_block(reader, |c| c.move_on_next())
+    }
+
+    fn move_on_prev<R: io::Read + io::Seek>(
+        &mut self,
+        reader: R,
+    ) -> Result<Option<(&[u8], &[u8])>, Error> {
+        self.recursive_index_block(reader, |c| c.move_on_prev())
+    }
+
+    fn move_on_key_greater_than_or_equal_to<R: io::Read + io::Seek>(
+        &mut self,
+        key: &[u8],
+        reader: R,
+    ) -> Result<Option<(&[u8], &[u8])>, Error> {
+        self.iter_index_blocks(reader, |c| c.move_on_key_greater_than_or_equal_to(key))
+    }
+
+    fn iter_index_blocks<R, F>(
+        &mut self,
+        mut reader: R,
+        mut mov: F,
+    ) -> Result<Option<(&[u8], &[u8])>, Error>
+    where
+        R: io::Read + io::Seek,
+        F: FnMut(&mut BlockCursor<Block>) -> Option<(&[u8], &[u8])>,
+    {
+        match self.inner.as_mut() {
+            Some(inner) => {
+                let mut jump_to_offset = self.base_block_offset;
+                for (offset, cursor) in inner {
+                    // Only seek and load the Block if it is not already the one that we
+                    // have in memory, we know that by checking the offset of the blocks.
+                    if jump_to_offset != *offset {
+                        reader.seek(SeekFrom::Start(jump_to_offset))?;
+                        *cursor = Block::new(&mut reader, self.compression_type)
+                            .map(Block::into_cursor)?;
+                        *offset = jump_to_offset;
+                    }
+
+                    match (mov)(cursor) {
+                        Some((_, offset_bytes)) => {
+                            let offset = offset_bytes.try_into().map(u64::from_be_bytes).unwrap();
+                            jump_to_offset = offset;
+                        }
+                        None => return Ok(None),
+                    }
+                }
+            }
+            None => self.inner = self.initial_index_blocks(reader, mov)?,
+        }
+
+        // We return the position pointed by the last index block level.
+        // The last index blocks exposes the offsets of the data blocks.
+        match self.inner.as_ref().and_then(|inner| inner.last()) {
+            Some((_, cursor)) => Ok(cursor.current()),
+            None => Ok(None),
+        }
+    }
+
+    fn recursive_index_block<R, FM>(
+        &mut self,
+        mut reader: R,
+        mut mov: FM,
+    ) -> Result<Option<(&[u8], &[u8])>, Error>
+    where
+        R: io::Read + io::Seek,
+        FM: FnMut(&mut BlockCursor<Block>) -> Option<(&[u8], &[u8])>,
+    {
+        fn recursive<'a, S, FN>(
+            reader: &mut S,
+            compression_type: CompressionType,
+            blocks: &'a mut [(u64, BlockCursor<Block>)],
+            mov: &mut FN,
+        ) -> Result<Option<(&'a [u8], &'a [u8])>, Error>
+        where
+            S: io::Read + io::Seek,
+            FN: FnMut(&mut BlockCursor<Block>) -> Option<(&[u8], &[u8])>,
+        {
+            match blocks.split_last_mut() {
+                Some(((_offset, cursor), head)) => {
+                    match (mov)(cursor) {
+                        Some((_key, _offset)) => Ok(cursor.current()),
+                        None => {
+                            // We reached the end of the current index block, so we ask for the
+                            // parent index block to execute the exact same user function and
+                            // return the offset where is located the block on which we must be
+                            // able to try again.
+                            match recursive(reader, compression_type, head, mov)? {
+                                Some((_, offset_bytes)) => {
+                                    let offset =
+                                        offset_bytes.try_into().map(u64::from_be_bytes).unwrap();
+                                    reader.seek(SeekFrom::Start(offset))?;
+                                    *cursor = Block::new(reader, compression_type)
+                                        .map(Block::into_cursor)?;
+
+                                    // We return the result of the call has is. If it returns None
+                                    // it means we are not able to execute the `mov` function.
+                                    Ok((mov)(cursor))
+                                }
+                                None => Ok(None),
+                            }
+                        }
+                    }
+                }
+                // If we reach this branch it means that the base index block was
+                // not able to execute the `mov` function and that we reached the
+                // end of everything! We must STOP!
+                None => Ok(None),
+            }
+        }
+
+        if self.inner.is_none() {
+            self.inner = self.initial_index_blocks(&mut reader, &mut mov)?;
+        }
+
+        match &mut self.inner {
+            Some(inner) => recursive(&mut reader, self.compression_type, inner, &mut mov),
+            None => Ok(None),
+        }
+    }
+
+    /// Returns the index block cursors by calling the user function to load the blocks.
+    fn initial_index_blocks<R, FM>(
+        &mut self,
+        mut reader: R,
+        mut mov: FM,
+    ) -> Result<Option<Vec<(u64, BlockCursor<Block>)>>, Error>
+    where
+        R: io::Read + io::Seek,
+        FM: FnMut(&mut BlockCursor<Block>) -> Option<(&[u8], &[u8])>,
+    {
+        let depth = self.index_levels as usize + 1;
+        let mut inner = Vec::with_capacity(depth);
+
+        let mut jump_to_offset = self.base_block_offset;
+        for _ in 0..depth {
+            reader.seek(SeekFrom::Start(jump_to_offset))?;
+            let mut cursor =
+                Block::new(&mut reader, self.compression_type).map(Block::into_cursor)?;
+
+            match (mov)(&mut cursor) {
+                Some((_key, offset_bytes)) => {
+                    let offset = offset_bytes.try_into().map(u64::from_be_bytes).unwrap();
+                    jump_to_offset = offset;
+                    inner.push((jump_to_offset, cursor));
+                }
+                None => return Ok(None),
+            }
+        }
+
+        Ok(Some(inner))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::convert::TryInto;
@@ -216,6 +420,17 @@ mod tests {
     use super::*;
     use crate::compression::CompressionType;
     use crate::writer::Writer;
+
+    #[test]
+    fn simple_empty() {
+        let writer = Writer::builder().index_levels(2).memory();
+        let bytes = writer.into_inner().unwrap();
+        let reader = Reader::new(Cursor::new(bytes.as_slice())).unwrap();
+
+        let mut cursor = reader.into_cursor().unwrap();
+        let result = cursor.move_on_key_greater_than_or_equal_to(&[0, 0, 0, 0]).unwrap();
+        assert_eq!(result, None);
+    }
 
     #[test]
     #[cfg_attr(miri, ignore)]
@@ -356,6 +571,135 @@ mod tests {
                     assert_eq!(k, expected, "queried value {}", n);
                 }
             }
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn easy_move_on_key_greater_than_or_equal_index_levels_2() {
+        let mut wb = Writer::builder();
+        wb.index_levels(2);
+        let mut writer = wb.memory();
+        let mut nums = Vec::new();
+        for x in (10..24000i32).step_by(3) {
+            nums.push(x);
+            let x = x.to_be_bytes();
+            writer.insert(&x, &x).unwrap();
+        }
+
+        let bytes = writer.into_inner().unwrap();
+        assert_ne!(bytes.len(), 0);
+
+        let reader = Reader::new(Cursor::new(bytes.as_slice())).unwrap();
+        let mut cursor = reader.into_cursor().unwrap();
+
+        for n in 0..24020i32 {
+            match nums.binary_search(&n) {
+                Ok(i) => {
+                    let n = nums[i];
+                    let (k, _) = cursor
+                        .move_on_key_greater_than_or_equal_to(&n.to_be_bytes())
+                        .unwrap()
+                        .unwrap();
+                    let k = k.try_into().map(i32::from_be_bytes).unwrap();
+                    assert_eq!(k, n);
+                }
+                Err(i) => {
+                    let k = cursor
+                        .move_on_key_greater_than_or_equal_to(&n.to_be_bytes())
+                        .unwrap()
+                        .map(|(k, _)| k.try_into().map(i32::from_be_bytes).unwrap());
+                    assert_eq!(k, nums.get(i).copied());
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn easy_move_on_key_lower_than_or_equal_index_levels_2() {
+        let mut wb = Writer::builder();
+        wb.index_levels(2);
+        let mut writer = wb.memory();
+        let mut nums = Vec::new();
+        for x in (10..24000i32).step_by(3) {
+            nums.push(x);
+            let x = x.to_be_bytes();
+            writer.insert(&x, &x).unwrap();
+        }
+
+        let bytes = writer.into_inner().unwrap();
+        assert_ne!(bytes.len(), 0);
+
+        let reader = Reader::new(Cursor::new(bytes.as_slice())).unwrap();
+        let mut cursor = reader.into_cursor().unwrap();
+        for n in 0..24020i32 {
+            match nums.binary_search(&n) {
+                Ok(i) => {
+                    let n = nums[i];
+                    let (k, _) = cursor
+                        .move_on_key_lower_than_or_equal_to(&n.to_be_bytes())
+                        .unwrap()
+                        .unwrap();
+                    let k = k.try_into().map(i32::from_be_bytes).unwrap();
+                    assert_eq!(k, n);
+                }
+                Err(i) => {
+                    let k = cursor
+                        .move_on_key_lower_than_or_equal_to(&n.to_be_bytes())
+                        .unwrap()
+                        .map(|(k, _)| k.try_into().map(i32::from_be_bytes).unwrap());
+                    let expected = i.checked_sub(1).and_then(|i| nums.get(i)).copied();
+                    assert_eq!(k, expected, "queried value {}", n);
+                }
+            }
+        }
+    }
+
+    quickcheck! {
+        #[cfg_attr(miri, ignore)]
+        fn qc_compare_to_binary_search(nums: Vec<u32>, queries: Vec<u32>) -> bool {
+            let mut nums = nums;
+            nums.sort_unstable();
+            nums.dedup();
+
+            let mut writer = Writer::builder().index_levels(2).memory();
+            for &x in &nums {
+                let x = x.to_be_bytes();
+                writer.insert(&x, &x).unwrap();
+            }
+
+            let bytes = writer.into_inner().unwrap();
+            let reader = Reader::new(Cursor::new(bytes.as_slice())).unwrap();
+            let mut cursor = reader.into_cursor().unwrap();
+
+            for q in queries {
+                match nums.binary_search(&q) {
+                    Ok(i) => {
+                        let q = nums[i];
+                        let (k, _) = cursor
+                            .move_on_key_lower_than_or_equal_to(&q.to_be_bytes())
+                            .unwrap()
+                            .unwrap();
+                        let k = k.try_into().map(u32::from_be_bytes).unwrap();
+                        if k != q {
+                            return false;
+                        }
+                    }
+                    Err(i) => {
+                        let k = cursor
+                            .move_on_key_lower_than_or_equal_to(&q.to_be_bytes())
+                            .unwrap()
+                            .map(|(k, _)| k.try_into().map(u32::from_be_bytes).unwrap());
+                        let expected = i.checked_sub(1).and_then(|i| nums.get(i)).copied();
+                        if k != expected {
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            return true;
         }
     }
 }

@@ -28,6 +28,7 @@ pub struct SorterBuilder<MF, CC> {
     max_nb_chunks: usize,
     chunk_compression_type: CompressionType,
     chunk_compression_level: u32,
+    index_levels: u8,
     chunk_creator: CC,
     merge: MF,
 }
@@ -42,6 +43,7 @@ impl<MF> SorterBuilder<MF, DefaultChunkCreator> {
             max_nb_chunks: DEFAULT_NB_CHUNKS,
             chunk_compression_type: CompressionType::None,
             chunk_compression_level: 0,
+            index_levels: 0,
             chunk_creator: DefaultChunkCreator::default(),
             merge,
         }
@@ -83,6 +85,19 @@ impl<MF, CC> SorterBuilder<MF, CC> {
         self
     }
 
+    /// The number of levels/indirection we will use to write the index footer.
+    ///
+    /// An indirection of 1 or 2 is sufficient to reduce the impact of
+    /// decompressing/reading a big index footer.
+    ///
+    /// The default is 0 which means that the index footer values directly
+    /// specifies the block where the requested entry can be found. The disavantage of this
+    /// is that the index block can be quite big and take time to be decompressed and read.
+    pub fn index_levels(&mut self, levels: u8) -> &mut Self {
+        self.index_levels = levels;
+        self
+    }
+
     /// The [`ChunkCreator`] strutc used to generate the chunks used
     /// by the [`Sorter`] to bufferize when required.
     pub fn chunk_creator<CC2>(self, creation: CC2) -> SorterBuilder<MF, CC2> {
@@ -92,6 +107,7 @@ impl<MF, CC> SorterBuilder<MF, CC> {
             max_nb_chunks: self.max_nb_chunks,
             chunk_compression_type: self.chunk_compression_type,
             chunk_compression_level: self.chunk_compression_level,
+            index_levels: self.index_levels,
             chunk_creator: creation,
             merge: self.merge,
         }
@@ -113,6 +129,7 @@ impl<MF, CC: ChunkCreator> SorterBuilder<MF, CC> {
             max_nb_chunks: self.max_nb_chunks,
             chunk_compression_type: self.chunk_compression_type,
             chunk_compression_level: self.chunk_compression_level,
+            index_levels: self.index_levels,
             chunk_creator: self.chunk_creator,
             merge: self.merge,
         }
@@ -319,6 +336,7 @@ pub struct Sorter<MF, CC: ChunkCreator = DefaultChunkCreator> {
     max_nb_chunks: usize,
     chunk_compression_type: CompressionType,
     chunk_compression_level: u32,
+    index_levels: u8,
     chunk_creator: CC,
     merge: MF,
 }
@@ -395,6 +413,7 @@ where
         let mut writer = WriterBuilder::new()
             .compression_type(self.chunk_compression_type)
             .compression_level(self.chunk_compression_level)
+            .index_levels(self.index_levels)
             .build(count_write_chunk);
 
         self.entries.sort_unstable_by_key();
@@ -449,6 +468,7 @@ where
         let mut writer = WriterBuilder::new()
             .compression_type(self.chunk_compression_type)
             .compression_level(self.chunk_compression_level)
+            .index_levels(self.index_levels)
             .build(count_write_chunk);
 
         let sources: Result<Vec<_>, Error<U>> = self

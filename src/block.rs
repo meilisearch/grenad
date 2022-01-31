@@ -218,9 +218,8 @@ impl<B: Borrow<Block>> BlockCursor<B> {
     /// Moves the cursor on the key lower than or equal to the given key in this block.
     pub fn move_on_key_lower_than_or_equal_to(&mut self, key: &[u8]) -> Option<(&[u8], &[u8])> {
         let offsets = self.block.borrow().index_offsets();
-        let result = offsets.binary_search_by_key(&key, |off| {
-            let (key, _, _) = self.block.borrow().entry_at(*off as usize).unwrap();
-            key
+        let result = offsets.binary_search_by_key(&Some(key), |off| {
+            self.block.borrow().entry_at(*off as usize).map(|(key, _, _)| key)
         });
 
         match result {
