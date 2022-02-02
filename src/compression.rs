@@ -10,23 +10,31 @@ pub enum CompressionType {
     /// Do not compress the blocks.
     None = 0,
     /// Use the [`snap`] crate to de/compress the blocks.
-    Snappy = 1,
+    ///
+    /// The 0.4.x and previous versions of grenad were using the `snap` crate
+    /// in a wrong way, making the crate slow when compressing using snappy.
+    /// This is the enum variant that defines this way of compression and that
+    /// is exposed for the sake of compatibility.
+    SnappyPre05 = 1,
     /// Use the [`flate2`] crate to de/compress the blocks.
     Zlib = 2,
     /// Use the [`lz4_flex`] crate to de/compress the blocks.
     Lz4 = 3,
     /// Use the [`zstd`] crate to de/compress the blocks.
     Zstd = 4,
+    /// Use the [`snap`] crate to de/compress the blocks.
+    Snappy = 5,
 }
 
 impl CompressionType {
     pub(crate) fn from_u8(value: u8) -> Option<CompressionType> {
         match value {
             0 => Some(CompressionType::None),
-            1 => Some(CompressionType::Snappy),
+            1 => Some(CompressionType::SnappyPre05),
             2 => Some(CompressionType::Zlib),
             3 => Some(CompressionType::Lz4),
             4 => Some(CompressionType::Zstd),
+            5 => Some(CompressionType::Snappy),
             _ => None,
         }
     }
@@ -37,10 +45,11 @@ impl FromStr for CompressionType {
 
     fn from_str(name: &str) -> Result<Self, Self::Err> {
         match name {
-            "snappy" => Ok(CompressionType::Snappy),
+            "snappy-pre-0.5" => Ok(CompressionType::SnappyPre05),
             "zlib" => Ok(CompressionType::Zlib),
             "lz4" => Ok(CompressionType::Lz4),
             "zstd" => Ok(CompressionType::Zstd),
+            "snappy" => Ok(CompressionType::Snappy),
             _ => Err(InvalidCompressionType),
         }
     }
@@ -64,13 +73,17 @@ impl fmt::Display for InvalidCompressionType {
 
 impl Error for InvalidCompressionType {}
 
-pub fn decompress(type_: CompressionType, data: &[u8]) -> io::Result<Cow<[u8]>> {
-    match type_ {
-        CompressionType::None => Ok(Cow::Borrowed(data)),
-        CompressionType::Zlib => zlib_decompress(data),
-        CompressionType::Snappy => snappy_decompress(data),
-        CompressionType::Lz4 => lz4_decompress(data),
-        CompressionType::Zstd => zstd_decompress(data),
+pub fn decompress<R>(typ: CompressionType, mut data: R, out: &mut Vec<u8>) -> io::Result<()>
+where
+    R: io::Read,
+{
+    match typ {
+        CompressionType::None => data.read_to_end(out).map(drop),
+        CompressionType::Zlib => zlib_decompress(data, out),
+        CompressionType::SnappyPre05 => snappy_pre_05_decompress(data, out),
+        CompressionType::Lz4 => lz4_decompress(data, out),
+        CompressionType::Zstd => zstd_decompress(data, out),
+        CompressionType::Snappy => snappy_decompress(data, out),
     }
 }
 
@@ -78,25 +91,23 @@ pub fn compress(type_: CompressionType, level: u32, data: &[u8]) -> io::Result<C
     match type_ {
         CompressionType::None => Ok(Cow::Borrowed(data)),
         CompressionType::Zlib => zlib_compress(data, level),
-        CompressionType::Snappy => snappy_compress(data, level),
+        CompressionType::SnappyPre05 => snappy_pre_05_compress(data, level),
         CompressionType::Lz4 => lz4_compress(data, level),
         CompressionType::Zstd => zstd_compress(data, level),
+        CompressionType::Snappy => snappy_compress(data, level),
     }
 }
 
 // --------- zlib ---------
 
 #[cfg(feature = "zlib")]
-fn zlib_decompress(data: &[u8]) -> io::Result<Cow<[u8]>> {
+fn zlib_decompress<R: io::Read>(data: R, out: &mut Vec<u8>) -> io::Result<()> {
     use std::io::Read;
-    let mut decoder = flate2::read::ZlibDecoder::new(data);
-    let mut buffer = Vec::new();
-    decoder.read_to_end(&mut buffer)?;
-    Ok(Cow::Owned(buffer))
+    flate2::read::ZlibDecoder::new(data).read_to_end(out).map(drop)
 }
 
 #[cfg(not(feature = "zlib"))]
-fn zlib_decompress(_data: &[u8]) -> io::Result<Cow<[u8]>> {
+fn zlib_decompress<R: io::Read>(_data: R, _out: &mut Vec<u8>) -> io::Result<()> {
     Err(io::Error::new(io::ErrorKind::Other, "unsupported zlib decompression"))
 }
 
@@ -114,23 +125,52 @@ fn zlib_compress(_data: &[u8], _level: u32) -> io::Result<Cow<[u8]>> {
     Err(io::Error::new(io::ErrorKind::Other, "unsupported zlib compression"))
 }
 
-// --------- snappy ---------
+// --------- snappy pre-0.5 ---------
 
 #[cfg(feature = "snappy")]
-fn snappy_decompress(data: &[u8]) -> io::Result<Cow<[u8]>> {
-    let mut decoder = snap::raw::Decoder::new();
-    decoder.decompress_vec(data).map_err(Into::into).map(Cow::Owned)
+fn snappy_pre_05_decompress<R: io::Read>(mut data: R, out: &mut Vec<u8>) -> io::Result<()> {
+    let mut input = Vec::new();
+    data.read_to_end(&mut input)?;
+    let len = snap::raw::decompress_len(&input)?;
+    out.resize(len, 0);
+    snap::raw::Decoder::new().decompress(&input, &mut out[..]).map(drop).map_err(Into::into)
 }
 
 #[cfg(not(feature = "snappy"))]
-fn snappy_decompress(_data: &[u8]) -> io::Result<Cow<[u8]>> {
+fn snappy_pre_05_decompress<R: io::Read>(_data: R, _out: &mut Vec<u8>) -> io::Result<()> {
+    Err(io::Error::new(io::ErrorKind::Other, "unsupported snappy decompression"))
+}
+
+#[cfg(feature = "snappy")]
+fn snappy_pre_05_compress(data: &[u8], _level: u32) -> io::Result<Cow<[u8]>> {
+    let mut decoder = snap::raw::Encoder::new();
+    decoder.compress_vec(data).map_err(Into::into).map(Cow::Owned)
+}
+
+#[cfg(not(feature = "snappy"))]
+fn snappy_pre_05_compress(_data: &[u8], _level: u32) -> io::Result<Cow<[u8]>> {
+    Err(io::Error::new(io::ErrorKind::Other, "unsupported snappy compression"))
+}
+
+// --------- snappy ---------
+
+#[cfg(feature = "snappy")]
+fn snappy_decompress<R: io::Read>(mut data: R, out: &mut Vec<u8>) -> io::Result<()> {
+    use io::Read;
+    snap::read::FrameDecoder::new(&mut data).read_to_end(out).map(drop)
+}
+
+#[cfg(not(feature = "snappy"))]
+fn snappy_decompress<R: io::Read>(_data: R, _out: &mut Vec<u8>) -> io::Result<()> {
     Err(io::Error::new(io::ErrorKind::Other, "unsupported snappy decompression"))
 }
 
 #[cfg(feature = "snappy")]
 fn snappy_compress(data: &[u8], _level: u32) -> io::Result<Cow<[u8]>> {
-    let mut decoder = snap::raw::Encoder::new();
-    decoder.compress_vec(data).map_err(Into::into).map(Cow::Owned)
+    use io::Write;
+    let mut encoder = snap::write::FrameEncoder::new(Vec::new());
+    encoder.write_all(data)?;
+    encoder.into_inner().map(Cow::Owned).map_err(|e| e.error().kind().into())
 }
 
 #[cfg(not(feature = "snappy"))]
@@ -141,14 +181,12 @@ fn snappy_compress(_data: &[u8], _level: u32) -> io::Result<Cow<[u8]>> {
 // --------- zstd ---------
 
 #[cfg(feature = "zstd")]
-fn zstd_decompress(data: &[u8]) -> io::Result<Cow<[u8]>> {
-    let mut buffer = Vec::new();
-    zstd::stream::copy_decode(data, &mut buffer)?;
-    Ok(Cow::Owned(buffer))
+fn zstd_decompress<R: io::Read>(data: R, out: &mut Vec<u8>) -> io::Result<()> {
+    zstd::stream::copy_decode(data, out)
 }
 
 #[cfg(not(feature = "zstd"))]
-fn zstd_decompress(_data: &[u8]) -> io::Result<Cow<[u8]>> {
+fn zstd_decompress<R: io::Read>(_data: R, _out: &mut Vec<u8>) -> io::Result<()> {
     Err(io::Error::new(io::ErrorKind::Other, "unsupported zstd decompression"))
 }
 
@@ -167,15 +205,13 @@ fn zstd_compress(_data: &[u8], _level: u32) -> io::Result<Cow<[u8]>> {
 // --------- lz4 ---------
 
 #[cfg(feature = "lz4")]
-fn lz4_decompress(data: &[u8]) -> io::Result<Cow<[u8]>> {
-    let mut buffer = Vec::new();
-    let mut rdr = lz4_flex::frame::FrameDecoder::new(data);
-    io::copy(&mut rdr, &mut buffer)?;
-    Ok(Cow::Owned(buffer))
+fn lz4_decompress<R: io::Read>(data: R, out: &mut Vec<u8>) -> io::Result<()> {
+    use io::Read;
+    lz4_flex::frame::FrameDecoder::new(data).read_to_end(out).map(drop)
 }
 
 #[cfg(not(feature = "lz4"))]
-fn lz4_decompress(_data: &[u8]) -> io::Result<Cow<[u8]>> {
+fn lz4_decompress<R: io::Read>(_data: R, _out: &mut Vec<u8>) -> io::Result<()> {
     Err(io::Error::new(io::ErrorKind::Other, "unsupported lz4 decompression"))
 }
 
@@ -206,8 +242,9 @@ mod tests {
         for ctype in [None, Zlib, Snappy, Zstd, Lz4] {
             let level = 0;
             let compressed = compress(ctype, level, data.as_bytes()).unwrap();
-            let output = decompress(ctype, &compressed).unwrap();
-            assert_eq!(output.as_ref(), data.as_bytes());
+            let mut output = Vec::new();
+            decompress(ctype, &mut compressed.as_ref(), &mut output).unwrap();
+            assert_eq!(output, data.as_bytes());
         }
     }
 }

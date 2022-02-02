@@ -5,6 +5,7 @@ use std::convert::Infallible;
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::mem::{align_of, size_of};
+use std::num::NonZeroUsize;
 use std::{cmp, io, ops, slice};
 
 use bytemuck::{cast_slice, cast_slice_mut, Pod, Zeroable};
@@ -26,9 +27,11 @@ pub struct SorterBuilder<MF, CC> {
     dump_threshold: usize,
     allow_realloc: bool,
     max_nb_chunks: usize,
-    chunk_compression_type: CompressionType,
-    chunk_compression_level: u32,
-    index_levels: u8,
+    chunk_compression_type: Option<CompressionType>,
+    chunk_compression_level: Option<u32>,
+    index_key_interval: Option<NonZeroUsize>,
+    block_size: Option<usize>,
+    index_levels: Option<u8>,
     chunk_creator: CC,
     merge: MF,
 }
@@ -41,9 +44,11 @@ impl<MF> SorterBuilder<MF, DefaultChunkCreator> {
             dump_threshold: DEFAULT_SORTER_MEMORY,
             allow_realloc: true,
             max_nb_chunks: DEFAULT_NB_CHUNKS,
-            chunk_compression_type: CompressionType::None,
-            chunk_compression_level: 0,
-            index_levels: 0,
+            chunk_compression_type: None,
+            chunk_compression_level: None,
+            index_key_interval: None,
+            block_size: None,
+            index_levels: None,
             chunk_creator: DefaultChunkCreator::default(),
             merge,
         }
@@ -75,13 +80,29 @@ impl<MF, CC> SorterBuilder<MF, CC> {
 
     /// Defines the compression type the built [`Sorter`] will use when buffering.
     pub fn chunk_compression_type(&mut self, compression: CompressionType) -> &mut Self {
-        self.chunk_compression_type = compression;
+        self.chunk_compression_type = Some(compression);
         self
     }
 
     /// Defines the compression level that the defined compression type will use.
     pub fn chunk_compression_level(&mut self, level: u32) -> &mut Self {
-        self.chunk_compression_level = level;
+        self.chunk_compression_level = Some(level);
+        self
+    }
+
+    /// The interval at which we store the index of a key in the
+    /// index footer, used to seek into a block.
+    pub fn index_key_interval(&mut self, interval: NonZeroUsize) -> &mut Self {
+        self.index_key_interval = Some(interval);
+        self
+    }
+
+    /// Defines the size of the blocks that the writer will write.
+    ///
+    /// The bigger the blocks are the better they are compressed
+    /// but the more time it takes to compress and decompress them.
+    pub fn block_size(&mut self, size: usize) -> &mut Self {
+        self.block_size = Some(size);
         self
     }
 
@@ -94,7 +115,7 @@ impl<MF, CC> SorterBuilder<MF, CC> {
     /// specifies the block where the requested entry can be found. The disavantage of this
     /// is that the index block can be quite big and take time to be decompressed and read.
     pub fn index_levels(&mut self, levels: u8) -> &mut Self {
-        self.index_levels = levels;
+        self.index_levels = Some(levels);
         self
     }
 
@@ -107,6 +128,8 @@ impl<MF, CC> SorterBuilder<MF, CC> {
             max_nb_chunks: self.max_nb_chunks,
             chunk_compression_type: self.chunk_compression_type,
             chunk_compression_level: self.chunk_compression_level,
+            index_key_interval: self.index_key_interval,
+            block_size: self.block_size,
             index_levels: self.index_levels,
             chunk_creator: creation,
             merge: self.merge,
@@ -129,6 +152,8 @@ impl<MF, CC: ChunkCreator> SorterBuilder<MF, CC> {
             max_nb_chunks: self.max_nb_chunks,
             chunk_compression_type: self.chunk_compression_type,
             chunk_compression_level: self.chunk_compression_level,
+            index_key_interval: self.index_key_interval,
+            block_size: self.block_size,
             index_levels: self.index_levels,
             chunk_creator: self.chunk_creator,
             merge: self.merge,
@@ -334,9 +359,11 @@ pub struct Sorter<MF, CC: ChunkCreator = DefaultChunkCreator> {
     allow_realloc: bool,
     dump_threshold: usize,
     max_nb_chunks: usize,
-    chunk_compression_type: CompressionType,
-    chunk_compression_level: u32,
-    index_levels: u8,
+    chunk_compression_type: Option<CompressionType>,
+    chunk_compression_level: Option<u32>,
+    index_key_interval: Option<NonZeroUsize>,
+    block_size: Option<usize>,
+    index_levels: Option<u8>,
     chunk_creator: CC,
     merge: MF,
 }
@@ -410,11 +437,23 @@ where
             .map_err(Error::convert_merge_error)
             .map(CountWrite::new)?;
 
-        let mut writer = WriterBuilder::new()
-            .compression_type(self.chunk_compression_type)
-            .compression_level(self.chunk_compression_level)
-            .index_levels(self.index_levels)
-            .build(count_write_chunk);
+        let mut writer_builder = WriterBuilder::new();
+        if let Some(compression_type) = self.chunk_compression_type {
+            writer_builder.compression_type(compression_type);
+        }
+        if let Some(compression_level) = self.chunk_compression_level {
+            writer_builder.compression_level(compression_level);
+        }
+        if let Some(index_key_interval) = self.index_key_interval {
+            writer_builder.index_key_interval(index_key_interval);
+        }
+        if let Some(block_size) = self.block_size {
+            writer_builder.block_size(block_size);
+        }
+        if let Some(index_levels) = self.index_levels {
+            writer_builder.index_levels(index_levels);
+        }
+        let mut writer = writer_builder.build(count_write_chunk);
 
         self.entries.sort_unstable_by_key();
 
@@ -465,11 +504,23 @@ where
             .map_err(Error::convert_merge_error)
             .map(CountWrite::new)?;
 
-        let mut writer = WriterBuilder::new()
-            .compression_type(self.chunk_compression_type)
-            .compression_level(self.chunk_compression_level)
-            .index_levels(self.index_levels)
-            .build(count_write_chunk);
+        let mut writer_builder = WriterBuilder::new();
+        if let Some(compression_type) = self.chunk_compression_type {
+            writer_builder.compression_type(compression_type);
+        }
+        if let Some(compression_level) = self.chunk_compression_level {
+            writer_builder.compression_level(compression_level);
+        }
+        if let Some(index_key_interval) = self.index_key_interval {
+            writer_builder.index_key_interval(index_key_interval);
+        }
+        if let Some(block_size) = self.block_size {
+            writer_builder.block_size(block_size);
+        }
+        if let Some(index_levels) = self.index_levels {
+            writer_builder.index_levels(index_levels);
+        }
+        let mut writer = writer_builder.build(count_write_chunk);
 
         let sources: Result<Vec<_>, Error<U>> = self
             .chunks

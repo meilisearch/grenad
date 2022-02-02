@@ -37,6 +37,15 @@ impl<R> ReaderCursor<R> {
     pub fn get_ref(&self) -> &R {
         self.reader.get_ref()
     }
+
+    /// Resets the position of the cursor.
+    ///
+    /// Useful when you want to be able to call `move_on_next` or `move_on_prev` in a loop
+    /// and ensure that it will start from the first or the last value of the cursor.
+    pub fn reset(&mut self) {
+        self.current_cursor = None;
+        self.index_block_cursor.reset();
+    }
 }
 
 impl<R: io::Read + io::Seek> ReaderCursor<R> {
@@ -237,6 +246,10 @@ impl IndexBlockCursor {
         index_levels: u8,
     ) -> IndexBlockCursor {
         IndexBlockCursor { base_block_offset, compression_type, index_levels, inner: None }
+    }
+
+    fn reset(&mut self) {
+        self.inner = None;
     }
 
     fn move_on_first<R: io::Read + io::Seek>(
