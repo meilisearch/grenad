@@ -127,7 +127,7 @@ impl BlockWriter {
         // We write the index offsets at the end of the file,
         // followed by the number of index offsets.
         let index_offsets_count: u32 = self.index_offsets.len().try_into().unwrap();
-        self.buffer.extend(self.index_offsets.iter().copied().map(u64::to_be_bytes).flatten());
+        self.buffer.extend(self.index_offsets.iter().copied().flat_map(u64::to_be_bytes));
         self.buffer.extend_from_slice(&index_offsets_count.to_be_bytes());
 
         BlockBuffer { block_builder: self }
