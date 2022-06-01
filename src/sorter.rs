@@ -709,4 +709,43 @@ mod tests {
         assert!(val.iter().eq(repeat(b"kiki").take(200).flatten()));
         assert!(cursor.move_on_next().unwrap().is_none());
     }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn correct_key_ordering() {
+        use std::borrow::Cow;
+
+        use rand::prelude::{SeedableRng, SliceRandom};
+        use rand::rngs::StdRng;
+
+        // This merge function concat bytes in the order they are received.
+        fn concat_bytes<'a>(
+            _key: &[u8],
+            values: &[Cow<'a, [u8]>],
+        ) -> Result<Cow<'a, [u8]>, Infallible> {
+            let mut output = Vec::new();
+            for value in values {
+                output.extend_from_slice(&value);
+            }
+            Ok(Cow::from(output))
+        }
+
+        // We create a sorter that will sum our u32s when necessary.
+        let mut sorter = SorterBuilder::new(concat_bytes).chunk_creator(CursorVec).build();
+
+        // We insert all the possible values of an u8 in ascending order
+        // but we split them along different keys.
+        let mut rng = StdRng::seed_from_u64(42);
+        let possible_keys = ["first", "second", "third", "fourth", "fifth", "sixth"];
+        for n in 0..=255 {
+            let key = possible_keys.choose(&mut rng).unwrap();
+            sorter.insert(key, [n]).unwrap();
+        }
+
+        // We can iterate over the entries in key-order.
+        let mut iter = sorter.into_stream_merger_iter().unwrap();
+        while let Some((_key, value)) = iter.next().unwrap() {
+            assert!(value.windows(2).all(|w| w[0] <= w[1]), "{:?}", value);
+        }
+    }
 }
