@@ -245,11 +245,11 @@ impl Entries {
 
     /// Sorts the entry bounds by the entries keys, after a sort
     /// the `iter` method will yield the entries sorted.
-    pub fn sort_unstable_by_key(&mut self) {
+    pub fn sort_by_key(&mut self) {
         let bounds_end = self.bounds_count * size_of::<EntryBound>();
         let (bounds, tail) = self.buffer.split_at_mut(bounds_end);
         let bounds = cast_slice_mut::<_, EntryBound>(bounds);
-        bounds.sort_unstable_by_key(|b| &tail[tail.len() - b.key_start..][..b.key_length as usize]);
+        bounds.sort_by_key(|b| &tail[tail.len() - b.key_start..][..b.key_length as usize]);
     }
 
     /// Returns an iterator over the keys and datas.
@@ -455,7 +455,7 @@ where
         }
         let mut writer = writer_builder.build(count_write_chunk);
 
-        self.entries.sort_unstable_by_key();
+        self.entries.sort_by_key();
 
         let mut current = None;
         for (key, value) in self.entries.iter() {
