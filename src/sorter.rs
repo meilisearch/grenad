@@ -245,11 +245,11 @@ impl Entries {
 
     /// Sorts the entry bounds by the entries keys, after a sort
     /// the `iter` method will yield the entries sorted.
-    pub fn sort_unstable_by_key(&mut self) {
+    pub fn sort_by_key(&mut self) {
         let bounds_end = self.bounds_count * size_of::<EntryBound>();
         let (bounds, tail) = self.buffer.split_at_mut(bounds_end);
         let bounds = cast_slice_mut::<_, EntryBound>(bounds);
-        bounds.sort_unstable_by_key(|b| &tail[tail.len() - b.key_start..][..b.key_length as usize]);
+        bounds.sort_by_key(|b| &tail[tail.len() - b.key_start..][..b.key_length as usize]);
     }
 
     /// Returns an iterator over the keys and datas.
@@ -455,7 +455,7 @@ where
         }
         let mut writer = writer_builder.build(count_write_chunk);
 
-        self.entries.sort_unstable_by_key();
+        self.entries.sort_by_key();
 
         let mut current = None;
         for (key, value) in self.entries.iter() {
@@ -708,5 +708,44 @@ mod tests {
         assert_eq!(key, b"hello");
         assert!(val.iter().eq(repeat(b"kiki").take(200).flatten()));
         assert!(cursor.move_on_next().unwrap().is_none());
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn correct_key_ordering() {
+        use std::borrow::Cow;
+
+        use rand::prelude::{SeedableRng, SliceRandom};
+        use rand::rngs::StdRng;
+
+        // This merge function concat bytes in the order they are received.
+        fn concat_bytes<'a>(
+            _key: &[u8],
+            values: &[Cow<'a, [u8]>],
+        ) -> Result<Cow<'a, [u8]>, Infallible> {
+            let mut output = Vec::new();
+            for value in values {
+                output.extend_from_slice(&value);
+            }
+            Ok(Cow::from(output))
+        }
+
+        // We create a sorter that will sum our u32s when necessary.
+        let mut sorter = SorterBuilder::new(concat_bytes).chunk_creator(CursorVec).build();
+
+        // We insert all the possible values of an u8 in ascending order
+        // but we split them along different keys.
+        let mut rng = StdRng::seed_from_u64(42);
+        let possible_keys = ["first", "second", "third", "fourth", "fifth", "sixth"];
+        for n in 0..=255 {
+            let key = possible_keys.choose(&mut rng).unwrap();
+            sorter.insert(key, [n]).unwrap();
+        }
+
+        // We can iterate over the entries in key-order.
+        let mut iter = sorter.into_stream_merger_iter().unwrap();
+        while let Some((_key, value)) = iter.next().unwrap() {
+            assert!(value.windows(2).all(|w| w[0] <= w[1]), "{:?}", value);
+        }
     }
 }
