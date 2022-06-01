@@ -1,7 +1,7 @@
 [package]
 name = "grenad"
 description = "Tools to sort, merge, write, and read immutable key-value pairs."
-version = "0.4.1"
+version = "0.4.2"
 authors = ["Kerollmops <clement@meilisearch.com>"]
 repository = "https://github.com/meilisearch/grenad"
 documentation = "https://docs.rs/grenad"
