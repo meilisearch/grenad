@@ -21,6 +21,17 @@ const MIN_NB_CHUNKS: usize = 1;
 
 use crate::{CompressionType, Error, Merger, MergerIter, Reader, Writer, WriterBuilder};
 
+/// The kind of sort algorithm used by the sorter to sort its internal vector.
+#[derive(Debug, Clone, Copy)]
+pub enum SortAlgorithm {
+    /// The stable sort algorithm maintains the relative order of values with equal keys,
+    /// but it is slower than the unstable algorithm.
+    Stable,
+    /// The unstable sort algorithm is faster than the unstable algorithm, but it
+    /// does not keep the relative order of values with equal keys.
+    Unstable,
+}
+
 /// A struct that is used to configure a [`Sorter`] to better fit your needs.
 #[derive(Debug, Clone, Copy)]
 pub struct SorterBuilder<MF, CC> {
@@ -33,6 +44,7 @@ pub struct SorterBuilder<MF, CC> {
     block_size: Option<usize>,
     index_levels: Option<u8>,
     chunk_creator: CC,
+    sort_algorithm: SortAlgorithm,
     merge: MF,
 }
 
@@ -50,6 +62,7 @@ impl<MF> SorterBuilder<MF, DefaultChunkCreator> {
             block_size: None,
             index_levels: None,
             chunk_creator: DefaultChunkCreator::default(),
+            sort_algorithm: SortAlgorithm::Stable,
             merge,
         }
     }
@@ -119,7 +132,15 @@ impl<MF, CC> SorterBuilder<MF, CC> {
         self
     }
 
-    /// The [`ChunkCreator`] strutc used to generate the chunks used
+    /// The algorithm used to sort the internal vector.
+    ///
+    /// The default is [`SortAlgorithm::Stable`](crate::SortAlgorithm::Stable).
+    pub fn sort_algorithm(&mut self, algo: SortAlgorithm) -> &mut Self {
+        self.sort_algorithm = algo;
+        self
+    }
+
+    /// The [`ChunkCreator`] struct used to generate the chunks used
     /// by the [`Sorter`] to bufferize when required.
     pub fn chunk_creator<CC2>(self, creation: CC2) -> SorterBuilder<MF, CC2> {
         SorterBuilder {
@@ -132,6 +153,7 @@ impl<MF, CC> SorterBuilder<MF, CC> {
             block_size: self.block_size,
             index_levels: self.index_levels,
             chunk_creator: creation,
+            sort_algorithm: self.sort_algorithm,
             merge: self.merge,
         }
     }
@@ -156,6 +178,7 @@ impl<MF, CC: ChunkCreator> SorterBuilder<MF, CC> {
             block_size: self.block_size,
             index_levels: self.index_levels,
             chunk_creator: self.chunk_creator,
+            sort_algorithm: self.sort_algorithm,
             merge: self.merge,
         }
     }
@@ -245,11 +268,15 @@ impl Entries {
 
     /// Sorts the entry bounds by the entries keys, after a sort
     /// the `iter` method will yield the entries sorted.
-    pub fn sort_by_key(&mut self) {
+    pub fn sort_by_key(&mut self, algorithm: SortAlgorithm) {
         let bounds_end = self.bounds_count * size_of::<EntryBound>();
         let (bounds, tail) = self.buffer.split_at_mut(bounds_end);
         let bounds = cast_slice_mut::<_, EntryBound>(bounds);
-        bounds.sort_by_key(|b| &tail[tail.len() - b.key_start..][..b.key_length as usize]);
+        let sort = match algorithm {
+            SortAlgorithm::Stable => <[EntryBound]>::sort_by_key,
+            SortAlgorithm::Unstable => <[EntryBound]>::sort_unstable_by_key,
+        };
+        sort(bounds, |b: &EntryBound| &tail[tail.len() - b.key_start..][..b.key_length as usize]);
     }
 
     /// Returns an iterator over the keys and datas.
@@ -365,6 +392,7 @@ pub struct Sorter<MF, CC: ChunkCreator = DefaultChunkCreator> {
     block_size: Option<usize>,
     index_levels: Option<u8>,
     chunk_creator: CC,
+    sort_algorithm: SortAlgorithm,
     merge: MF,
 }
 
@@ -455,7 +483,7 @@ where
         }
         let mut writer = writer_builder.build(count_write_chunk);
 
-        self.entries.sort_by_key();
+        self.entries.sort_by_key(self.sort_algorithm);
 
         let mut current = None;
         for (key, value) in self.entries.iter() {
