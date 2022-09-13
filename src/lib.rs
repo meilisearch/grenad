@@ -188,7 +188,9 @@ pub use self::metadata::FileVersion;
 pub use self::reader::{PrefixIter, RangeIter, Reader, ReaderCursor, RevPrefixIter, RevRangeIter};
 #[cfg(feature = "tempfile")]
 pub use self::sorter::TempFileChunk;
-pub use self::sorter::{ChunkCreator, CursorVec, DefaultChunkCreator, Sorter, SorterBuilder};
+pub use self::sorter::{
+    ChunkCreator, CursorVec, DefaultChunkCreator, SortAlgorithm, Sorter, SorterBuilder,
+};
 pub use self::writer::{Writer, WriterBuilder};
 
 /// Sometimes we need to use an unsafe trick to make the compiler happy.
