@@ -337,7 +337,7 @@ struct EntryBound {
     data_length: u32,
 }
 
-/// Representes an `EntryBound` aligned buffer.
+/// Represents an `EntryBound` aligned buffer.
 struct EntryBoundAlignedBuffer(&'static mut [u8]);
 
 impl EntryBoundAlignedBuffer {
@@ -347,7 +347,11 @@ impl EntryBoundAlignedBuffer {
         let size = (size + entry_bound_size - 1) / entry_bound_size * entry_bound_size;
         let layout = Layout::from_size_align(size, align_of::<EntryBound>()).unwrap();
         let ptr = unsafe { alloc(layout) };
-        assert!(!ptr.is_null(), "the allocator is unable to allocate that much memory");
+        assert!(
+            !ptr.is_null(),
+            "the allocator is unable to allocate that much memory ({} bytes requested)",
+            size
+        );
         let slice = unsafe { slice::from_raw_parts_mut(ptr, size) };
         EntryBoundAlignedBuffer(slice)
     }
@@ -775,5 +779,14 @@ mod tests {
         while let Some((_key, value)) = iter.next().unwrap() {
             assert!(value.windows(2).all(|w| w[0] <= w[1]), "{:?}", value);
         }
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "the allocator is unable to allocate that much memory (281474976710656 bytes requested)"
+    )]
+    #[cfg_attr(miri, ignore)]
+    fn too_big_allocation() {
+        EntryBoundAlignedBuffer::new(1 << 48);
     }
 }
