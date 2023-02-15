@@ -273,7 +273,13 @@ impl Entries {
         let (bounds, tail) = self.buffer.split_at_mut(bounds_end);
         let bounds = cast_slice_mut::<_, EntryBound>(bounds);
         let sort = match algorithm {
+            #[cfg(feature = "glidesort-stable")]
+            SortAlgorithm::Stable => glidesort::sort_by_key::<EntryBound, _, _>,
+            #[cfg(not(feature = "glidesort-stable"))]
             SortAlgorithm::Stable => <[EntryBound]>::sort_by_key,
+            #[cfg(feature = "glidesort-unstable")]
+            SortAlgorithm::Unstable => glidesort::sort_by_key::<EntryBound, _, _>,
+            #[cfg(not(feature = "glidesort-unstable"))]
             SortAlgorithm::Unstable => <[EntryBound]>::sort_unstable_by_key,
         };
         sort(bounds, |b: &EntryBound| &tail[tail.len() - b.key_start..][..b.key_length as usize]);
