@@ -1,14 +1,19 @@
 use std::alloc::{alloc, dealloc, Layout};
 use std::borrow::Cow;
+use std::collections::hash_map::DefaultHasher;
 use std::convert::Infallible;
 #[cfg(feature = "tempfile")]
 use std::fs::File;
+use std::hash::{Hash, Hasher};
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::iter::repeat_with;
 use std::mem::{align_of, size_of};
 use std::num::NonZeroUsize;
+use std::thread::{self, JoinHandle};
 use std::{cmp, io, ops, slice};
 
 use bytemuck::{cast_slice, cast_slice_mut, Pod, Zeroable};
+use crossbeam_channel::{unbounded, Sender};
 
 use crate::count_write::CountWrite;
 
@@ -195,6 +200,44 @@ impl<MF, CC: ChunkCreator> SorterBuilder<MF, CC> {
             sort_algorithm: self.sort_algorithm,
             sort_in_parallel: self.sort_in_parallel,
             merge: self.merge,
+        }
+    }
+
+    /// Creates a [`ParallelSorter`] configured by this builder.
+    ///
+    /// Indicate the number of different [`Sorter`] you want to use to balanced
+    /// the load to sort.
+    pub fn build_in_parallel<U>(self, number: NonZeroUsize) -> ParallelSorter<MF, U, CC>
+    where
+        MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>
+            + Clone
+            + Send
+            + 'static,
+        U: Send + 'static,
+        CC: Clone + Send + 'static,
+        CC::Chunk: Send + 'static,
+    {
+        match number.get() {
+            1 => ParallelSorter::Single(self.build()),
+            number => {
+                let (senders, receivers): (Vec<Sender<(usize, Vec<u8>)>>, Vec<_>) =
+                    repeat_with(unbounded).take(number).unzip();
+
+                let mut handles = Vec::new();
+                for receiver in receivers {
+                    let sorter_builder = self.clone();
+                    handles.push(thread::spawn(move || {
+                        let mut sorter = sorter_builder.build();
+                        for (key_length, data) in receiver {
+                            let (key, val) = data.split_at(key_length);
+                            sorter.insert(key, val)?;
+                        }
+                        sorter.into_reader_cursors().map_err(Into::into)
+                    }));
+                }
+
+                ParallelSorter::Multi { senders, handles, merge_function: self.merge }
+            }
         }
     }
 }
@@ -667,6 +710,86 @@ where
 
         result.map(|readers| (readers, merge))
     }
+}
+
+// TODO Make this private by wrapping it
+pub enum ParallelSorter<MF, U, CC: ChunkCreator = DefaultChunkCreator>
+where
+    MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
+{
+    Single(Sorter<MF, CC>),
+    Multi {
+        // Indicates the length of the key and the bytes assoicated to the key + the data.
+        senders: Vec<Sender<(usize, Vec<u8>)>>,
+        handles: Vec<JoinHandle<Result<Vec<ReaderCursor<CC::Chunk>>, Error<U>>>>,
+        merge_function: MF,
+    },
+}
+
+impl<MF, U, CC> ParallelSorter<MF, U, CC>
+where
+    MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
+    CC: ChunkCreator,
+{
+    /// Insert an entry into the [`Sorter`] making sure that conflicts
+    /// are resolved by the provided merge function.
+    pub fn insert<K, V>(&mut self, key: K, val: V) -> Result<(), Error<U>>
+    where
+        K: AsRef<[u8]>,
+        V: AsRef<[u8]>,
+    {
+        let key = key.as_ref();
+        let val = val.as_ref();
+        match self {
+            ParallelSorter::Single(sorter) => sorter.insert(key, val),
+            ParallelSorter::Multi { senders, .. } => {
+                let key_length = key.len();
+                let key_hash = compute_hash(key);
+
+                // We put the key and val into the same allocation to speed things up
+                // by reducing the amount of calls to the allocator.
+                //
+                // TODO test that it works for real because having a bigger allocation
+                //      can make it harder to find the space.
+                let mut data = Vec::with_capacity(key.len() + val.len());
+                data.extend_from_slice(key);
+                data.extend_from_slice(val);
+
+                let index = (key_hash % senders.len() as u64) as usize;
+                // TODO remove unwraps
+                senders[index].send((key_length, data)).unwrap();
+
+                Ok(())
+            }
+        }
+    }
+
+    /// Consumes this [`Sorter`] and outputs a stream of the merged entries in key-order.
+    pub fn into_stream_merger_iter(self) -> Result<MergerIter<CC::Chunk, MF>, Error<U>> {
+        match self {
+            ParallelSorter::Single(sorter) => sorter.into_stream_merger_iter(),
+            ParallelSorter::Multi { senders, handles, merge_function } => {
+                drop(senders);
+
+                let mut sources = Vec::new();
+                for handle in handles {
+                    // TODO remove unwraps
+                    sources.extend(handle.join().unwrap()?);
+                }
+
+                let mut builder = Merger::builder(merge_function);
+                builder.extend(sources);
+                builder.build().into_stream_merger_iter().map_err(Error::convert_merge_error)
+            }
+        }
+    }
+}
+
+/// Computes the hash of a key.
+fn compute_hash(key: &[u8]) -> u64 {
+    let mut state = DefaultHasher::new();
+    key.hash(&mut state);
+    state.finish()
 }
 
 /// A trait that represent a `ChunkCreator`.
