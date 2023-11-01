@@ -2,7 +2,21 @@
 //! The entries in the grenad files are _immutable_ and the only way to modify them is by _creating
 //! a new file_ with the changes.
 //!
-//! # Example: Use the `Writer` and `Reader` structs
+//! # Features
+//!
+//! You can define which compression schemes to support, there are currently a few
+//! available choices, these determine which types will be available inside the above modules:
+//!
+//! - _Snappy_ with the [`snap`](https://crates.io/crates/snap) crate.
+//! - _Zlib_ with the [`flate2`](https://crates.io/crates/flate2) crate.
+//! - _Lz4_ with the [`lz4_flex`](https://crates.io/crates/lz4_flex) crate.
+//!
+//! If you need more performances you can enable the `rayon` feature that will enable a bunch
+//! of new settings like being able to make the `Sorter` sort in parallel.
+//!
+//! # Examples
+//!
+//! ## Use the `Writer` and `Reader` structs
 //!
 //! You can use the [`Writer`] struct to store key-value pairs into the specified
 //! [`std::io::Write`] type. The [`Reader`] type can then be used to read the entries.
@@ -37,7 +51,7 @@
 //! # Ok(()) }
 //! ```
 //!
-//! # Example: Use the `Merger` struct
+//! ## Use the `Merger` struct
 //!
 //! In this example we show how you can merge multiple [`Reader`]s
 //! by using a _merge function_ when a conflict is encountered.
@@ -107,7 +121,7 @@
 //! # Ok(()) }
 //! ```
 //!
-//! # Example: Use the `Sorter` struct
+//! ## Use the `Sorter` struct
 //!
 //! In this example we show how by defining a _merge function_, we can insert
 //! multiple entries with the same key and output them in lexicographic order.
@@ -189,7 +203,8 @@ pub use self::reader::{PrefixIter, RangeIter, Reader, ReaderCursor, RevPrefixIte
 #[cfg(feature = "tempfile")]
 pub use self::sorter::TempFileChunk;
 pub use self::sorter::{
-    ChunkCreator, CursorVec, DefaultChunkCreator, SortAlgorithm, Sorter, SorterBuilder,
+    ChunkCreator, CursorVec, DefaultChunkCreator, ParallelSorter, SortAlgorithm, Sorter,
+    SorterBuilder,
 };
 pub use self::writer::{Writer, WriterBuilder};
 
