@@ -225,9 +225,9 @@ impl<MF, CC: ChunkCreator> SorterBuilder<MF, CC> {
 
                 let mut handles = Vec::new();
                 for receiver in receivers {
-                    let sorter_builder = self.clone();
+                    let mut sorter_builder = self.clone();
+                    sorter_builder.dump_threshold(self.dump_threshold / number);
                     handles.push(thread::spawn(move || {
-                        // TODO make sure the max memory is divided by the number of threads
                         let mut sorter = sorter_builder.build();
                         for (key_length, data) in receiver {
                             let (key, val) = data.split_at(key_length);
