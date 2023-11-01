@@ -47,6 +47,7 @@ pub struct SorterBuilder<MF, CC> {
     index_levels: Option<u8>,
     chunk_creator: CC,
     sort_algorithm: SortAlgorithm,
+    sort_in_parallel: bool,
     merge: MF,
 }
 
@@ -65,6 +66,7 @@ impl<MF> SorterBuilder<MF, DefaultChunkCreator> {
             index_levels: None,
             chunk_creator: DefaultChunkCreator::default(),
             sort_algorithm: SortAlgorithm::Stable,
+            sort_in_parallel: false,
             merge,
         }
     }
@@ -142,6 +144,15 @@ impl<MF, CC> SorterBuilder<MF, CC> {
         self
     }
 
+    /// Whether we use [rayon to sort](https://docs.rs/rayon/latest/rayon/slice/trait.ParallelSliceMut.html#method.par_sort_by_key) the entries.
+    ///
+    /// By default we do not sort in parallel, the value is `false`.
+    #[cfg(feature = "rayon")]
+    pub fn sort_in_parallel(&mut self, value: bool) -> &mut Self {
+        self.sort_in_parallel = value;
+        self
+    }
+
     /// The [`ChunkCreator`] struct used to generate the chunks used
     /// by the [`Sorter`] to bufferize when required.
     pub fn chunk_creator<CC2>(self, creation: CC2) -> SorterBuilder<MF, CC2> {
@@ -156,6 +167,7 @@ impl<MF, CC> SorterBuilder<MF, CC> {
             index_levels: self.index_levels,
             chunk_creator: creation,
             sort_algorithm: self.sort_algorithm,
+            sort_in_parallel: self.sort_in_parallel,
             merge: self.merge,
         }
     }
@@ -181,6 +193,7 @@ impl<MF, CC: ChunkCreator> SorterBuilder<MF, CC> {
             index_levels: self.index_levels,
             chunk_creator: self.chunk_creator,
             sort_algorithm: self.sort_algorithm,
+            sort_in_parallel: self.sort_in_parallel,
             merge: self.merge,
         }
     }
@@ -279,6 +292,27 @@ impl Entries {
             SortAlgorithm::Unstable => <[EntryBound]>::sort_unstable_by_key,
         };
         sort(bounds, |b: &EntryBound| &tail[tail.len() - b.key_start..][..b.key_length as usize]);
+    }
+
+    /// Sorts in **parallel** the entry bounds by the entries keys,
+    /// after a sort the `iter` method will yield the entries sorted.
+    #[cfg(feature = "rayon")]
+    pub fn par_sort_by_key(&mut self, algorithm: SortAlgorithm) {
+        use rayon::slice::ParallelSliceMut;
+
+        let bounds_end = self.bounds_count * size_of::<EntryBound>();
+        let (bounds, tail) = self.buffer.split_at_mut(bounds_end);
+        let bounds = cast_slice_mut::<_, EntryBound>(bounds);
+        let sort = match algorithm {
+            SortAlgorithm::Stable => <[EntryBound]>::par_sort_by_key,
+            SortAlgorithm::Unstable => <[EntryBound]>::par_sort_unstable_by_key,
+        };
+        sort(bounds, |b: &EntryBound| &tail[tail.len() - b.key_start..][..b.key_length as usize]);
+    }
+
+    #[cfg(not(feature = "rayon"))]
+    pub fn par_sort_by_key(&mut self, algorithm: SortAlgorithm) {
+        self.sort_by_key(algorithm);
     }
 
     /// Returns an iterator over the keys and datas.
@@ -399,6 +433,7 @@ pub struct Sorter<MF, CC: ChunkCreator = DefaultChunkCreator> {
     index_levels: Option<u8>,
     chunk_creator: CC,
     sort_algorithm: SortAlgorithm,
+    sort_in_parallel: bool,
     merge: MF,
 }
 
@@ -489,7 +524,11 @@ where
         }
         let mut writer = writer_builder.build(count_write_chunk);
 
-        self.entries.sort_by_key(self.sort_algorithm);
+        if self.sort_in_parallel {
+            self.entries.par_sort_by_key(self.sort_algorithm);
+        } else {
+            self.entries.sort_by_key(self.sort_algorithm);
+        }
 
         let mut current = None;
         for (key, value) in self.entries.iter() {
@@ -509,7 +548,7 @@ where
 
         if let Some((key, vals)) = current.take() {
             let merged_val = (self.merge)(key, &vals).map_err(Error::Merge)?;
-            writer.insert(&key, &merged_val)?;
+            writer.insert(key, &merged_val)?;
         }
 
         // We retrieve the wrapped CountWrite and extract
