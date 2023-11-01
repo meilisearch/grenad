@@ -203,7 +203,8 @@ pub use self::reader::{PrefixIter, RangeIter, Reader, ReaderCursor, RevPrefixIte
 #[cfg(feature = "tempfile")]
 pub use self::sorter::TempFileChunk;
 pub use self::sorter::{
-    ChunkCreator, CursorVec, DefaultChunkCreator, SortAlgorithm, Sorter, SorterBuilder,
+    ChunkCreator, CursorVec, DefaultChunkCreator, ParallelSorter, SortAlgorithm, Sorter,
+    SorterBuilder,
 };
 pub use self::writer::{Writer, WriterBuilder};
 

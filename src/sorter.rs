@@ -218,7 +218,7 @@ impl<MF, CC: ChunkCreator> SorterBuilder<MF, CC> {
         CC::Chunk: Send + 'static,
     {
         match number.get() {
-            1 => ParallelSorter::Single(self.build()),
+            1 | 2 => ParallelSorter(ParallelSorterInner::Single(self.build())),
             number => {
                 let (senders, receivers): (Vec<Sender<(usize, Vec<u8>)>>, Vec<_>) =
                     repeat_with(unbounded).take(number).unzip();
@@ -227,6 +227,7 @@ impl<MF, CC: ChunkCreator> SorterBuilder<MF, CC> {
                 for receiver in receivers {
                     let sorter_builder = self.clone();
                     handles.push(thread::spawn(move || {
+                        // TODO make sure the max memory is divided by the number of threads
                         let mut sorter = sorter_builder.build();
                         for (key_length, data) in receiver {
                             let (key, val) = data.split_at(key_length);
@@ -236,7 +237,11 @@ impl<MF, CC: ChunkCreator> SorterBuilder<MF, CC> {
                     }));
                 }
 
-                ParallelSorter::Multi { senders, handles, merge_function: self.merge }
+                ParallelSorter(ParallelSorterInner::Multi {
+                    senders,
+                    handles,
+                    merge_function: self.merge,
+                })
             }
         }
     }
@@ -712,14 +717,19 @@ where
     }
 }
 
-// TODO Make this private by wrapping it
-pub enum ParallelSorter<MF, U, CC: ChunkCreator = DefaultChunkCreator>
+pub struct ParallelSorter<MF, U, CC: ChunkCreator = DefaultChunkCreator>(
+    ParallelSorterInner<MF, U, CC>,
+)
+where
+    MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>;
+
+enum ParallelSorterInner<MF, U, CC: ChunkCreator = DefaultChunkCreator>
 where
     MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
 {
     Single(Sorter<MF, CC>),
     Multi {
-        // Indicates the length of the key and the bytes assoicated to the key + the data.
+        // Indicates the length of the key and the bytes associated to the key + the data.
         senders: Vec<Sender<(usize, Vec<u8>)>>,
         handles: Vec<JoinHandle<Result<Vec<ReaderCursor<CC::Chunk>>, Error<U>>>>,
         merge_function: MF,
@@ -740,9 +750,9 @@ where
     {
         let key = key.as_ref();
         let val = val.as_ref();
-        match self {
-            ParallelSorter::Single(sorter) => sorter.insert(key, val),
-            ParallelSorter::Multi { senders, .. } => {
+        match &mut self.0 {
+            ParallelSorterInner::Single(sorter) => sorter.insert(key, val),
+            ParallelSorterInner::Multi { senders, .. } => {
                 let key_length = key.len();
                 let key_hash = compute_hash(key);
 
@@ -766,9 +776,9 @@ where
 
     /// Consumes this [`Sorter`] and outputs a stream of the merged entries in key-order.
     pub fn into_stream_merger_iter(self) -> Result<MergerIter<CC::Chunk, MF>, Error<U>> {
-        match self {
-            ParallelSorter::Single(sorter) => sorter.into_stream_merger_iter(),
-            ParallelSorter::Multi { senders, handles, merge_function } => {
+        match self.0 {
+            ParallelSorterInner::Single(sorter) => sorter.into_stream_merger_iter(),
+            ParallelSorterInner::Multi { senders, handles, merge_function } => {
                 drop(senders);
 
                 let mut sources = Vec::new();
