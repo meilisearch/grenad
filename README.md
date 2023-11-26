@@ -1,4 +1,5 @@
-# Grenad
+<p align="center"><img width="280px" src="https://raw.githubusercontent.com/meilisearch/grenad/main/assets/grenad-pomegranate-logo.png"></a>
+<h1 align="center" >Grenad</h1>
 
 [![License](https://img.shields.io/badge/license-MIT-green)](#LICENSE)
 [![Crates.io](https://img.shields.io/crates/v/grenad)](https://crates.io/crates/grenad)
