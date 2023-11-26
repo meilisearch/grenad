@@ -1,3 +1,10 @@
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/meilisearch/grenad/main/assets/grenad-pomegranate.ico?raw=true"
+)]
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/meilisearch/grenad/main/assets/grenad-pomegranate-logo.png?raw=true"
+)]
+
 //! This library provides tools to sort, merge, write, and read immutable key-value pairs.
 //! The entries in the grenad files are _immutable_ and the only way to modify them is by _creating
 //! a new file_ with the changes.
