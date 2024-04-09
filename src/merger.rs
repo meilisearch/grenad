@@ -44,13 +44,14 @@ impl<R, MF> Extend<ReaderCursor<R>> for MergerBuilder<R, MF> {
 
 struct Entry<R> {
     cursor: ReaderCursor<R>,
+    source_index: usize,
 }
 
 impl<R> Ord for Entry<R> {
     fn cmp(&self, other: &Entry<R>) -> Ordering {
         let skey = self.cursor.current().map(|(k, _)| k);
         let okey = other.cursor.current().map(|(k, _)| k);
-        skey.cmp(&okey).reverse()
+        skey.cmp(&okey).then(self.source_index.cmp(&other.source_index)).reverse()
     }
 }
 
@@ -87,9 +88,9 @@ impl<R: io::Read + io::Seek, MF> Merger<R, MF> {
     /// Consumes this [`Merger`] and outputs a stream of the merged entries in key-order.
     pub fn into_stream_merger_iter(self) -> Result<MergerIter<R, MF>, Error> {
         let mut heap = BinaryHeap::new();
-        for mut source in self.sources {
+        for (index, mut source) in self.sources.into_iter().enumerate() {
             if source.move_on_next()?.is_some() {
-                heap.push(Entry { cursor: source });
+                heap.push(Entry { cursor: source, source_index: index });
             }
         }
 
