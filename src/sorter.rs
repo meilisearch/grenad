@@ -1,6 +1,7 @@
 use std::alloc::{alloc, dealloc, Layout};
 use std::borrow::Cow;
 use std::convert::Infallible;
+use std::fmt::Debug;
 #[cfg(feature = "tempfile")]
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
@@ -666,6 +667,28 @@ where
             .collect();
 
         result.map(|readers| (readers, merge))
+    }
+}
+
+impl<MF, CC: ChunkCreator> Debug for Sorter<MF, CC> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sorter")
+            .field("chunks_count", &self.chunks.len())
+            .field("remaining_entries", &self.entries.remaining())
+            .field("chunks_total_size", &self.chunks_total_size)
+            .field("allow_realloc", &self.allow_realloc)
+            .field("dump_threshold", &self.dump_threshold)
+            .field("max_nb_chunks", &self.max_nb_chunks)
+            .field("chunk_compression_type", &self.chunk_compression_type)
+            .field("chunk_compression_level", &self.chunk_compression_level)
+            .field("index_key_interval", &self.index_key_interval)
+            .field("block_size", &self.block_size)
+            .field("index_levels", &self.index_levels)
+            .field("chunk_creator", &"[chunck creator]")
+            .field("sort_algorithm", &self.sort_algorithm)
+            .field("sort_in_parallel", &self.sort_in_parallel)
+            .field("merge", &"[merge function]")
+            .finish()
     }
 }
 
