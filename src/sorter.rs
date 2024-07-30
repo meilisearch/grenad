@@ -468,7 +468,7 @@ where
 {
     /// Insert an entry into the [`Sorter`] making sure that conflicts
     /// are resolved by the provided merge function.
-    pub fn insert<K, V>(&mut self, key: K, val: V) -> Result<(), Error<U>>
+    pub fn insert<K, V>(&mut self, key: K, val: V) -> crate::Result<(), U>
     where
         K: AsRef<[u8]>,
         V: AsRef<[u8]>,
@@ -499,7 +499,7 @@ where
     ///
     /// Writes the in-memory entries to disk, using the specify settings
     /// to compress the block and entries. It clears the in-memory entries.
-    fn write_chunk(&mut self) -> Result<u64, Error<U>> {
+    fn write_chunk(&mut self) -> crate::Result<u64, U> {
         let count_write_chunk = self
             .chunk_creator
             .create()
@@ -570,7 +570,7 @@ where
     ///
     /// Merges all of the chunks into a final chunk that replaces them.
     /// It uses the user provided merge function to resolve merge conflicts.
-    fn merge_chunks(&mut self) -> Result<u64, Error<U>> {
+    fn merge_chunks(&mut self) -> crate::Result<u64, U> {
         let count_write_chunk = self
             .chunk_creator
             .create()
@@ -596,7 +596,7 @@ where
         }
         let mut writer = writer_builder.build(count_write_chunk);
 
-        let sources: Result<Vec<_>, Error<U>> = self
+        let sources: crate::Result<Vec<_>, U> = self
             .chunks
             .drain(..)
             .map(|mut chunk| {
@@ -629,7 +629,7 @@ where
     pub fn write_into_stream_writer<W: io::Write>(
         self,
         writer: &mut Writer<W>,
-    ) -> Result<(), Error<U>> {
+    ) -> crate::Result<(), U> {
         let mut iter = self.into_stream_merger_iter()?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
@@ -638,7 +638,7 @@ where
     }
 
     /// Consumes this [`Sorter`] and outputs a stream of the merged entries in key-order.
-    pub fn into_stream_merger_iter(self) -> Result<MergerIter<CC::Chunk, MF>, Error<U>> {
+    pub fn into_stream_merger_iter(self) -> crate::Result<MergerIter<CC::Chunk, MF>, U> {
         let (sources, merge) = self.extract_reader_cursors_and_merger()?;
         let mut builder = Merger::builder(merge);
         builder.extend(sources);
@@ -646,14 +646,14 @@ where
     }
 
     /// Consumes this [`Sorter`] and outputs the list of reader cursors.
-    pub fn into_reader_cursors(self) -> Result<Vec<ReaderCursor<CC::Chunk>>, Error<U>> {
+    pub fn into_reader_cursors(self) -> crate::Result<Vec<ReaderCursor<CC::Chunk>>, U> {
         self.extract_reader_cursors_and_merger().map(|(readers, _)| readers)
     }
 
     /// A helper function to extract the readers and the merge function.
     fn extract_reader_cursors_and_merger(
         mut self,
-    ) -> Result<(Vec<ReaderCursor<CC::Chunk>>, MF), Error<U>> {
+    ) -> crate::Result<(Vec<ReaderCursor<CC::Chunk>>, MF), U> {
         // Flush the pending unordered entries.
         self.chunks_total_size = self.write_chunk()?;
 
@@ -757,7 +757,7 @@ mod tests {
     use super::*;
 
     fn merge<'a>(_key: &[u8], vals: &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, Infallible> {
-        Ok(vals.iter().map(AsRef::as_ref).flatten().cloned().collect())
+        Ok(vals.iter().flat_map(AsRef::as_ref).cloned().collect())
     }
 
     #[test]
@@ -833,7 +833,7 @@ mod tests {
         ) -> Result<Cow<'a, [u8]>, Infallible> {
             let mut output = Vec::new();
             for value in values {
-                output.extend_from_slice(&value);
+                output.extend_from_slice(value);
             }
             Ok(Cow::from(output))
         }

@@ -113,7 +113,7 @@ where
     pub fn write_into_stream_writer<W: io::Write>(
         self,
         writer: &mut Writer<W>,
-    ) -> Result<(), Error<U>> {
+    ) -> crate::Result<(), U> {
         let mut iter = self.into_stream_merger_iter().map_err(Error::convert_merge_error)?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
@@ -138,7 +138,7 @@ where
     MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
 {
     /// Yield the entries in key-order where values have been merged when needed.
-    pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error<U>> {
+    pub fn next(&mut self) -> crate::Result<Option<(&[u8], &[u8])>, U> {
         let first_entry = match self.heap.pop() {
             Some(entry) => entry,
             None => return Ok(None),

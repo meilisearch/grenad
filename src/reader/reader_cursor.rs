@@ -89,7 +89,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
     }
 
     /// Moves the cursor on the first entry and returns it.
-    pub fn move_on_first(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
+    pub fn move_on_first(&mut self) -> crate::Result<Option<(&[u8], &[u8])>> {
         match self.index_block_cursor.move_on_first(&mut self.reader.reader)? {
             Some((_, offset_bytes)) => {
                 let offset = offset_bytes.try_into().map(u64::from_be_bytes).unwrap();
@@ -109,7 +109,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
     }
 
     /// Moves the cursor on the last entry and returns it.
-    pub fn move_on_last(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
+    pub fn move_on_last(&mut self) -> crate::Result<Option<(&[u8], &[u8])>> {
         match self.index_block_cursor.move_on_last(&mut self.reader.reader)? {
             Some((_, offset_bytes)) => {
                 let offset = offset_bytes.try_into().map(u64::from_be_bytes).unwrap();
@@ -129,7 +129,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
     }
 
     /// Moves the cursor on the entry following the current one and returns it.
-    pub fn move_on_next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
+    pub fn move_on_next(&mut self) -> crate::Result<Option<(&[u8], &[u8])>> {
         match self.current_cursor.as_mut().map(BlockCursor::move_on_next) {
             Some(Some((key, val))) => {
                 let (key, val) = unsafe { crate::transmute_entry_to_static(key, val) };
@@ -147,7 +147,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
     }
 
     /// Moves the cursor on the entry preceding the current one and returns it.
-    pub fn move_on_prev(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
+    pub fn move_on_prev(&mut self) -> crate::Result<Option<(&[u8], &[u8])>> {
         match self.current_cursor.as_mut().map(BlockCursor::move_on_prev) {
             Some(Some((key, val))) => {
                 let (key, val) = unsafe { crate::transmute_entry_to_static(key, val) };
@@ -169,7 +169,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
     pub fn move_on_key_lower_than_or_equal_to<A: AsRef<[u8]>>(
         &mut self,
         target_key: A,
-    ) -> Result<Option<(&[u8], &[u8])>, Error> {
+    ) -> crate::Result<Option<(&[u8], &[u8])>> {
         let target_key = target_key.as_ref();
         match self.move_on_key_greater_than_or_equal_to(target_key)? {
             Some((key, val)) if key == target_key => {
@@ -186,7 +186,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
     pub fn move_on_key_greater_than_or_equal_to<A: AsRef<[u8]>>(
         &mut self,
         key: A,
-    ) -> Result<Option<(&[u8], &[u8])>, Error> {
+    ) -> crate::Result<Option<(&[u8], &[u8])>> {
         // We move on the block which has a key greater than or equal to the key we are
         // searching for as the key stored in the index block is the last key of the block.
         let key = key.as_ref();
@@ -213,7 +213,7 @@ impl<R: io::Read + io::Seek> ReaderCursor<R> {
     pub fn move_on_key_equal_to<A: AsRef<[u8]>>(
         &mut self,
         key: A,
-    ) -> Result<Option<(&[u8], &[u8])>, Error> {
+    ) -> crate::Result<Option<(&[u8], &[u8])>> {
         let key = key.as_ref();
         self.move_on_key_greater_than_or_equal_to(key).map(|opt| opt.filter(|(k, _)| *k == key))
     }
@@ -255,28 +255,28 @@ impl IndexBlockCursor {
     fn move_on_first<R: io::Read + io::Seek>(
         &mut self,
         reader: R,
-    ) -> Result<Option<(&[u8], &[u8])>, Error> {
+    ) -> crate::Result<Option<(&[u8], &[u8])>> {
         self.iter_index_blocks(reader, |c| c.move_on_first())
     }
 
     fn move_on_last<R: io::Read + io::Seek>(
         &mut self,
         reader: R,
-    ) -> Result<Option<(&[u8], &[u8])>, Error> {
+    ) -> crate::Result<Option<(&[u8], &[u8])>> {
         self.iter_index_blocks(reader, |c| c.move_on_last())
     }
 
     fn move_on_next<R: io::Read + io::Seek>(
         &mut self,
         reader: R,
-    ) -> Result<Option<(&[u8], &[u8])>, Error> {
+    ) -> crate::Result<Option<(&[u8], &[u8])>> {
         self.recursive_index_block(reader, |c| c.move_on_next())
     }
 
     fn move_on_prev<R: io::Read + io::Seek>(
         &mut self,
         reader: R,
-    ) -> Result<Option<(&[u8], &[u8])>, Error> {
+    ) -> crate::Result<Option<(&[u8], &[u8])>> {
         self.recursive_index_block(reader, |c| c.move_on_prev())
     }
 
@@ -284,7 +284,7 @@ impl IndexBlockCursor {
         &mut self,
         key: &[u8],
         reader: R,
-    ) -> Result<Option<(&[u8], &[u8])>, Error> {
+    ) -> crate::Result<Option<(&[u8], &[u8])>> {
         self.iter_index_blocks(reader, |c| c.move_on_key_greater_than_or_equal_to(key))
     }
 
@@ -292,7 +292,7 @@ impl IndexBlockCursor {
         &mut self,
         mut reader: R,
         mut mov: F,
-    ) -> Result<Option<(&[u8], &[u8])>, Error>
+    ) -> crate::Result<Option<(&[u8], &[u8])>>
     where
         R: io::Read + io::Seek,
         F: FnMut(&mut BlockCursor<Block>) -> Option<(&[u8], &[u8])>,
@@ -334,7 +334,7 @@ impl IndexBlockCursor {
         &mut self,
         mut reader: R,
         mut mov: FM,
-    ) -> Result<Option<(&[u8], &[u8])>, Error>
+    ) -> crate::Result<Option<(&[u8], &[u8])>>
     where
         R: io::Read + io::Seek,
         FM: FnMut(&mut BlockCursor<Block>) -> Option<(&[u8], &[u8])>,
@@ -344,7 +344,7 @@ impl IndexBlockCursor {
             compression_type: CompressionType,
             blocks: &'a mut [(u64, BlockCursor<Block>)],
             mov: &mut FN,
-        ) -> Result<Option<(&'a [u8], &'a [u8])>, Error>
+        ) -> crate::Result<Option<(&'a [u8], &'a [u8])>>
         where
             S: io::Read + io::Seek,
             FN: FnMut(&mut BlockCursor<Block>) -> Option<(&[u8], &[u8])>,
@@ -397,7 +397,7 @@ impl IndexBlockCursor {
         &mut self,
         mut reader: R,
         mut mov: FM,
-    ) -> Result<Option<Vec<(u64, BlockCursor<Block>)>>, Error>
+    ) -> crate::Result<Option<Vec<(u64, BlockCursor<Block>)>>>
     where
         R: io::Read + io::Seek,
         FM: FnMut(&mut BlockCursor<Block>) -> Option<(&[u8], &[u8])>,
@@ -441,7 +441,7 @@ mod tests {
         let reader = Reader::new(Cursor::new(bytes.as_slice())).unwrap();
 
         let mut cursor = reader.into_cursor().unwrap();
-        let result = cursor.move_on_key_greater_than_or_equal_to(&[0, 0, 0, 0]).unwrap();
+        let result = cursor.move_on_key_greater_than_or_equal_to([0, 0, 0, 0]).unwrap();
         assert_eq!(result, None);
     }
 
@@ -453,7 +453,7 @@ mod tests {
 
         for x in 0..2000u32 {
             let x = x.to_be_bytes();
-            writer.insert(&x, &x).unwrap();
+            writer.insert(x, x).unwrap();
         }
 
         let bytes = writer.into_inner().unwrap();
@@ -490,7 +490,7 @@ mod tests {
 
         for x in 0..2000u32 {
             let x = x.to_be_bytes();
-            writer.insert(&x, &x).unwrap();
+            writer.insert(x, x).unwrap();
         }
 
         let bytes = writer.into_inner().unwrap();
@@ -517,7 +517,7 @@ mod tests {
         for x in (10..24000i32).step_by(3) {
             nums.push(x);
             let x = x.to_be_bytes();
-            writer.insert(&x, &x).unwrap();
+            writer.insert(x, x).unwrap();
         }
 
         let bytes = writer.into_inner().unwrap();
@@ -531,7 +531,7 @@ mod tests {
                 Ok(i) => {
                     let n = nums[i];
                     let (k, _) = cursor
-                        .move_on_key_greater_than_or_equal_to(&n.to_be_bytes())
+                        .move_on_key_greater_than_or_equal_to(n.to_be_bytes())
                         .unwrap()
                         .unwrap();
                     let k = k.try_into().map(i32::from_be_bytes).unwrap();
@@ -539,7 +539,7 @@ mod tests {
                 }
                 Err(i) => {
                     let k = cursor
-                        .move_on_key_greater_than_or_equal_to(&n.to_be_bytes())
+                        .move_on_key_greater_than_or_equal_to(n.to_be_bytes())
                         .unwrap()
                         .map(|(k, _)| k.try_into().map(i32::from_be_bytes).unwrap());
                     assert_eq!(k, nums.get(i).copied());
@@ -556,7 +556,7 @@ mod tests {
         for x in (10..24000i32).step_by(3) {
             nums.push(x);
             let x = x.to_be_bytes();
-            writer.insert(&x, &x).unwrap();
+            writer.insert(x, x).unwrap();
         }
 
         let bytes = writer.into_inner().unwrap();
@@ -569,7 +569,7 @@ mod tests {
                 Ok(i) => {
                     let n = nums[i];
                     let (k, _) = cursor
-                        .move_on_key_lower_than_or_equal_to(&n.to_be_bytes())
+                        .move_on_key_lower_than_or_equal_to(n.to_be_bytes())
                         .unwrap()
                         .unwrap();
                     let k = k.try_into().map(i32::from_be_bytes).unwrap();
@@ -577,7 +577,7 @@ mod tests {
                 }
                 Err(i) => {
                     let k = cursor
-                        .move_on_key_lower_than_or_equal_to(&n.to_be_bytes())
+                        .move_on_key_lower_than_or_equal_to(n.to_be_bytes())
                         .unwrap()
                         .map(|(k, _)| k.try_into().map(i32::from_be_bytes).unwrap());
                     let expected = i.checked_sub(1).and_then(|i| nums.get(i)).copied();
@@ -597,7 +597,7 @@ mod tests {
         for x in (10..24000i32).step_by(3) {
             nums.push(x);
             let x = x.to_be_bytes();
-            writer.insert(&x, &x).unwrap();
+            writer.insert(x, x).unwrap();
         }
 
         let bytes = writer.into_inner().unwrap();
@@ -611,7 +611,7 @@ mod tests {
                 Ok(i) => {
                     let n = nums[i];
                     let (k, _) = cursor
-                        .move_on_key_greater_than_or_equal_to(&n.to_be_bytes())
+                        .move_on_key_greater_than_or_equal_to(n.to_be_bytes())
                         .unwrap()
                         .unwrap();
                     let k = k.try_into().map(i32::from_be_bytes).unwrap();
@@ -619,7 +619,7 @@ mod tests {
                 }
                 Err(i) => {
                     let k = cursor
-                        .move_on_key_greater_than_or_equal_to(&n.to_be_bytes())
+                        .move_on_key_greater_than_or_equal_to(n.to_be_bytes())
                         .unwrap()
                         .map(|(k, _)| k.try_into().map(i32::from_be_bytes).unwrap());
                     assert_eq!(k, nums.get(i).copied());
@@ -638,7 +638,7 @@ mod tests {
         for x in (10..24000i32).step_by(3) {
             nums.push(x);
             let x = x.to_be_bytes();
-            writer.insert(&x, &x).unwrap();
+            writer.insert(x, x).unwrap();
         }
 
         let bytes = writer.into_inner().unwrap();
@@ -651,7 +651,7 @@ mod tests {
                 Ok(i) => {
                     let n = nums[i];
                     let (k, _) = cursor
-                        .move_on_key_lower_than_or_equal_to(&n.to_be_bytes())
+                        .move_on_key_lower_than_or_equal_to(n.to_be_bytes())
                         .unwrap()
                         .unwrap();
                     let k = k.try_into().map(i32::from_be_bytes).unwrap();
@@ -659,7 +659,7 @@ mod tests {
                 }
                 Err(i) => {
                     let k = cursor
-                        .move_on_key_lower_than_or_equal_to(&n.to_be_bytes())
+                        .move_on_key_lower_than_or_equal_to(n.to_be_bytes())
                         .unwrap()
                         .map(|(k, _)| k.try_into().map(i32::from_be_bytes).unwrap());
                     let expected = i.checked_sub(1).and_then(|i| nums.get(i)).copied();
@@ -679,7 +679,7 @@ mod tests {
             let mut writer = Writer::builder().index_levels(2).memory();
             for &x in &nums {
                 let x = x.to_be_bytes();
-                writer.insert(&x, &x).unwrap();
+                writer.insert(x, x).unwrap();
             }
 
             let bytes = writer.into_inner().unwrap();
@@ -691,7 +691,7 @@ mod tests {
                     Ok(i) => {
                         let q = nums[i];
                         let (k, _) = cursor
-                            .move_on_key_lower_than_or_equal_to(&q.to_be_bytes())
+                            .move_on_key_lower_than_or_equal_to(q.to_be_bytes())
                             .unwrap()
                             .unwrap();
                         let k = k.try_into().map(u32::from_be_bytes).unwrap();
@@ -701,7 +701,7 @@ mod tests {
                     }
                     Err(i) => {
                         let k = cursor
-                            .move_on_key_lower_than_or_equal_to(&q.to_be_bytes())
+                            .move_on_key_lower_than_or_equal_to(q.to_be_bytes())
                             .unwrap()
                             .map(|(k, _)| k.try_into().map(u32::from_be_bytes).unwrap());
                         let expected = i.checked_sub(1).and_then(|i| nums.get(i)).copied();

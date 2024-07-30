@@ -187,7 +187,7 @@
 #[cfg(test)]
 #[macro_use]
 extern crate quickcheck;
-
+use std::convert::Infallible;
 use std::mem;
 
 mod block;
@@ -213,6 +213,8 @@ pub use self::sorter::{
     ChunkCreator, CursorVec, DefaultChunkCreator, SortAlgorithm, Sorter, SorterBuilder,
 };
 pub use self::writer::{Writer, WriterBuilder};
+
+pub type Result<T, U = Infallible> = std::result::Result<T, Error<U>>;
 
 /// Sometimes we need to use an unsafe trick to make the compiler happy.
 /// You can read more about the issue [on the Rust's Github issues].

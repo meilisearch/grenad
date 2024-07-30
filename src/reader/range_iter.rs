@@ -1,7 +1,7 @@
 use std::io;
 use std::ops::{Bound, RangeBounds};
 
-use crate::{Error, ReaderCursor};
+use crate::ReaderCursor;
 
 /// An iterator that is able to yield all the entries lying in a specified range.
 #[derive(Clone)]
@@ -24,7 +24,7 @@ impl<R: io::Read + io::Seek> RangeIter<R> {
     }
 
     /// Returns the next entry that is inside of the given range.
-    pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
+    pub fn next(&mut self) -> crate::Result<Option<(&[u8], &[u8])>> {
         let entry = if self.move_on_start {
             self.move_on_start = false;
             match self.range.start_bound() {
@@ -75,7 +75,7 @@ impl<R: io::Read + io::Seek> RevRangeIter<R> {
     }
 
     /// Returns the next entry that is inside of the given range.
-    pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
+    pub fn next(&mut self) -> crate::Result<Option<(&[u8], &[u8])>> {
         let entry = if self.move_on_start {
             self.move_on_start = false;
             match self.range.end_bound() {
@@ -149,7 +149,7 @@ mod tests {
         for x in (10..24000i32).step_by(3) {
             nums.insert(x);
             let x = x.to_be_bytes();
-            writer.insert(&x, &x).unwrap();
+            writer.insert(x, x).unwrap();
         }
 
         let bytes = writer.into_inner().unwrap();
@@ -186,7 +186,7 @@ mod tests {
         for x in (10..24000i32).step_by(3) {
             nums.insert(x);
             let x = x.to_be_bytes();
-            writer.insert(&x, &x).unwrap();
+            writer.insert(x, x).unwrap();
         }
 
         let bytes = writer.into_inner().unwrap();
