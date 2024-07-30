@@ -330,7 +330,7 @@ mod tests {
 
         for x in 0..2000u32 {
             let x = x.to_be_bytes();
-            writer.insert(&x, &x).unwrap();
+            writer.insert(x, x).unwrap();
         }
 
         let bytes = writer.into_inner().unwrap();
@@ -346,7 +346,7 @@ mod tests {
 
         for x in 0..2000u32 {
             let x = x.to_be_bytes();
-            writer.insert(&x, &x).unwrap();
+            writer.insert(x, x).unwrap();
         }
 
         let bytes = writer.into_inner().unwrap();
@@ -363,7 +363,7 @@ mod tests {
 
         for x in 0..2000u32 {
             let x = x.to_be_bytes();
-            writer.insert(&x, &x).unwrap();
+            writer.insert(x, x).unwrap();
         }
 
         let bytes = writer.into_inner().unwrap();
@@ -382,7 +382,7 @@ mod tests {
 
         for x in 0..total {
             let x = x.to_be_bytes();
-            writer.insert(&x, &x).unwrap();
+            writer.insert(x, x).unwrap();
         }
 
         let bytes = writer.into_inner().unwrap();

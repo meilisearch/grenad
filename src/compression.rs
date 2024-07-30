@@ -4,10 +4,11 @@ use std::str::FromStr;
 use std::{fmt, io};
 
 /// The different supported types of compression.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum CompressionType {
     /// Do not compress the blocks.
+    #[default]
     None = 0,
     /// Use the [`snap`] crate to de/compress the blocks.
     ///
@@ -52,12 +53,6 @@ impl FromStr for CompressionType {
             "snappy" => Ok(CompressionType::Snappy),
             _ => Err(InvalidCompressionType),
         }
-    }
-}
-
-impl Default for CompressionType {
-    fn default() -> CompressionType {
-        CompressionType::None
     }
 }
 

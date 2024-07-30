@@ -16,7 +16,7 @@ fn index_levels(bytes: &[u8]) {
 
     for x in (0..NUMBER_OF_ENTRIES).step_by(1_567) {
         let num = x.to_be_bytes();
-        cursor.move_on_key_greater_than_or_equal_to(&num).unwrap().unwrap();
+        cursor.move_on_key_greater_than_or_equal_to(num).unwrap().unwrap();
     }
 }
 
