@@ -187,6 +187,7 @@
 #[cfg(test)]
 #[macro_use]
 extern crate quickcheck;
+use std::borrow::Cow;
 use std::convert::Infallible;
 use std::mem;
 
@@ -215,6 +216,31 @@ pub use self::sorter::{
 pub use self::writer::{Writer, WriterBuilder};
 
 pub type Result<T, U = Infallible> = std::result::Result<T, Error<U>>;
+
+// TODO move this elsewhere
+pub trait MergeFunction {
+    type Error;
+    fn merge<'a>(
+        &self,
+        key: &[u8],
+        values: &[Cow<'a, [u8]>],
+    ) -> std::result::Result<Cow<'a, [u8]>, Self::Error>;
+}
+
+impl<MF> MergeFunction for &MF
+where
+    MF: MergeFunction,
+{
+    type Error = MF::Error;
+
+    fn merge<'a>(
+        &self,
+        key: &[u8],
+        values: &[Cow<'a, [u8]>],
+    ) -> std::result::Result<Cow<'a, [u8]>, Self::Error> {
+        (*self).merge(key, values)
+    }
+}
 
 /// Sometimes we need to use an unsafe trick to make the compiler happy.
 /// You can read more about the issue [on the Rust's Github issues].

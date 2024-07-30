@@ -116,8 +116,8 @@ fn map_bound<T, U, F: FnOnce(T) -> U>(bound: Bound<T>, f: F) -> Bound<U> {
 fn end_contains(end: Bound<&Vec<u8>>, key: &[u8]) -> bool {
     match end {
         Bound::Unbounded => true,
-        Bound::Included(end) => key <= end,
-        Bound::Excluded(end) => key < end,
+        Bound::Included(end) => key <= end.as_slice(),
+        Bound::Excluded(end) => key < end.as_slice(),
     }
 }
 
@@ -125,8 +125,8 @@ fn end_contains(end: Bound<&Vec<u8>>, key: &[u8]) -> bool {
 fn start_contains(end: Bound<&Vec<u8>>, key: &[u8]) -> bool {
     match end {
         Bound::Unbounded => true,
-        Bound::Included(end) => key >= end,
-        Bound::Excluded(end) => key > end,
+        Bound::Included(end) => key >= end.as_slice(),
+        Bound::Excluded(end) => key > end.as_slice(),
     }
 }
 

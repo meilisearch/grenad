@@ -4,7 +4,7 @@ use std::collections::BinaryHeap;
 use std::io;
 use std::iter::once;
 
-use crate::{Error, ReaderCursor, Writer};
+use crate::{Error, MergeFunction, ReaderCursor, Writer};
 
 /// A struct that is used to configure a [`Merger`] with the sources to merge.
 pub struct MergerBuilder<R, MF> {
@@ -95,7 +95,7 @@ impl<R: io::Read + io::Seek, MF> Merger<R, MF> {
         }
 
         Ok(MergerIter {
-            merge: self.merge,
+            merge_function: self.merge,
             heap,
             current_key: Vec::new(),
             merged_value: Vec::new(),
@@ -104,16 +104,16 @@ impl<R: io::Read + io::Seek, MF> Merger<R, MF> {
     }
 }
 
-impl<R, MF, U> Merger<R, MF>
+impl<R, MF> Merger<R, MF>
 where
     R: io::Read + io::Seek,
-    MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
+    MF: MergeFunction,
 {
     /// Consumes this [`Merger`] and streams the entries to the [`Writer`] given in parameter.
     pub fn write_into_stream_writer<W: io::Write>(
         self,
         writer: &mut Writer<W>,
-    ) -> crate::Result<(), U> {
+    ) -> crate::Result<(), MF::Error> {
         let mut iter = self.into_stream_merger_iter().map_err(Error::convert_merge_error)?;
         while let Some((key, val)) = iter.next()? {
             writer.insert(key, val)?;
@@ -124,7 +124,7 @@ where
 
 /// An iterator that yield the merged entries in key-order.
 pub struct MergerIter<R, MF> {
-    merge: MF,
+    merge_function: MF,
     heap: BinaryHeap<Entry<R>>,
     current_key: Vec<u8>,
     merged_value: Vec<u8>,
@@ -132,13 +132,13 @@ pub struct MergerIter<R, MF> {
     tmp_entries: Vec<Entry<R>>,
 }
 
-impl<R, MF, U> MergerIter<R, MF>
+impl<R, MF> MergerIter<R, MF>
 where
     R: io::Read + io::Seek,
-    MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, U>,
+    MF: MergeFunction,
 {
     /// Yield the entries in key-order where values have been merged when needed.
-    pub fn next(&mut self) -> crate::Result<Option<(&[u8], &[u8])>, U> {
+    pub fn next(&mut self) -> crate::Result<Option<(&[u8], &[u8])>, MF::Error> {
         let first_entry = match self.heap.pop() {
             Some(entry) => entry,
             None => return Ok(None),
@@ -167,7 +167,7 @@ where
             self.tmp_entries.iter().filter_map(|e| e.cursor.current().map(|(_, v)| v));
         let values: Vec<_> = once(first_value).chain(other_values).map(Cow::Borrowed).collect();
 
-        match (self.merge)(first_key, &values) {
+        match self.merge_function.merge(first_key, &values) {
             Ok(value) => {
                 self.current_key.clear();
                 self.current_key.extend_from_slice(first_key);
