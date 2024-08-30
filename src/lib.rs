@@ -203,6 +203,8 @@ mod sorter;
 mod varint;
 mod writer;
 
+use either::Either;
+
 pub use self::compression::CompressionType;
 pub use self::error::Error;
 pub use self::merger::{Merger, MergerBuilder, MergerIter};
@@ -242,10 +244,29 @@ where
     }
 }
 
+impl<MFA, MFB> MergeFunction for Either<MFA, MFB>
+where
+    MFA: MergeFunction,
+    MFB: MergeFunction<Error = MFA::Error>,
+{
+    type Error = MFA::Error;
+
+    fn merge<'a>(
+        &self,
+        key: &[u8],
+        values: &[Cow<'a, [u8]>],
+    ) -> std::result::Result<Cow<'a, [u8]>, Self::Error> {
+        match self {
+            Either::Left(mfa) => mfa.merge(key, values),
+            Either::Right(mfb) => mfb.merge(key, values),
+        }
+    }
+}
+
 /// Sometimes we need to use an unsafe trick to make the compiler happy.
 /// You can read more about the issue [on the Rust's Github issues].
 ///
 /// [on the Rust's Github issues]: https://github.com/rust-lang/rust/issues/47680
 unsafe fn transmute_entry_to_static(key: &[u8], val: &[u8]) -> (&'static [u8], &'static [u8]) {
-    (mem::transmute(key), mem::transmute(val))
+    (mem::transmute::<&[u8], &'static [u8]>(key), mem::transmute::<&[u8], &'static [u8]>(val))
 }
