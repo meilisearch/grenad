@@ -196,6 +196,7 @@ mod block_writer;
 mod compression;
 mod count_write;
 mod error;
+mod merge_function;
 mod merger;
 mod metadata;
 mod reader;
@@ -203,10 +204,9 @@ mod sorter;
 mod varint;
 mod writer;
 
-use either::Either;
-
 pub use self::compression::CompressionType;
 pub use self::error::Error;
+pub use self::merge_function::MergeFunction;
 pub use self::merger::{Merger, MergerBuilder, MergerIter};
 pub use self::metadata::FileVersion;
 pub use self::reader::{PrefixIter, RangeIter, Reader, ReaderCursor, RevPrefixIter, RevRangeIter};
@@ -218,50 +218,6 @@ pub use self::sorter::{
 pub use self::writer::{Writer, WriterBuilder};
 
 pub type Result<T, U = Infallible> = std::result::Result<T, Error<U>>;
-
-// TODO move this elsewhere
-pub trait MergeFunction {
-    type Error;
-    fn merge<'a>(
-        &self,
-        key: &[u8],
-        values: &[Cow<'a, [u8]>],
-    ) -> std::result::Result<Cow<'a, [u8]>, Self::Error>;
-}
-
-impl<MF> MergeFunction for &MF
-where
-    MF: MergeFunction,
-{
-    type Error = MF::Error;
-
-    fn merge<'a>(
-        &self,
-        key: &[u8],
-        values: &[Cow<'a, [u8]>],
-    ) -> std::result::Result<Cow<'a, [u8]>, Self::Error> {
-        (*self).merge(key, values)
-    }
-}
-
-impl<MFA, MFB> MergeFunction for Either<MFA, MFB>
-where
-    MFA: MergeFunction,
-    MFB: MergeFunction<Error = MFA::Error>,
-{
-    type Error = MFA::Error;
-
-    fn merge<'a>(
-        &self,
-        key: &[u8],
-        values: &[Cow<'a, [u8]>],
-    ) -> std::result::Result<Cow<'a, [u8]>, Self::Error> {
-        match self {
-            Either::Left(mfa) => mfa.merge(key, values),
-            Either::Right(mfb) => mfb.merge(key, values),
-        }
-    }
-}
 
 /// Sometimes we need to use an unsafe trick to make the compiler happy.
 /// You can read more about the issue [on the Rust's Github issues].
