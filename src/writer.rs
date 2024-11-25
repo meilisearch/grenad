@@ -146,9 +146,9 @@ impl Writer<()> {
     }
 }
 
-impl<W: io::Write> Writer<W> {
+impl<W: io::Write> AsRef<W> for Writer<W> {
     /// Gets a reference to the underlying writer.
-    pub fn as_ref(&self) -> &W {
+    fn as_ref(&self) -> &W {
         self.writer.as_ref()
     }
 }

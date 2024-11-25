@@ -393,6 +393,7 @@ impl IndexBlockCursor {
     }
 
     /// Returns the index block cursors by calling the user function to load the blocks.
+    #[allow(clippy::type_complexity)] // Return type is not THAT complex
     fn initial_index_blocks<R, FM>(
         &mut self,
         mut reader: R,

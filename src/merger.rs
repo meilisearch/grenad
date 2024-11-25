@@ -20,6 +20,7 @@ impl<R, MF> MergerBuilder<R, MF> {
     }
 
     /// Add a source to merge, this function can be chained.
+    #[allow(clippy::should_implement_trait)] // We return interior references
     pub fn add(mut self, source: ReaderCursor<R>) -> Self {
         self.push(source);
         self
@@ -138,6 +139,8 @@ where
     MF: MergeFunction,
 {
     /// Yield the entries in key-order where values have been merged when needed.
+    #[allow(clippy::should_implement_trait)] // We return interior references
+    #[allow(clippy::type_complexity)] // Return type is not THAT complex
     pub fn next(&mut self) -> crate::Result<Option<(&[u8], &[u8])>, MF::Error> {
         let first_entry = match self.heap.pop() {
             Some(entry) => entry,

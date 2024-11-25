@@ -187,7 +187,6 @@
 #[cfg(test)]
 #[macro_use]
 extern crate quickcheck;
-use std::borrow::Cow;
 use std::convert::Infallible;
 use std::mem;
 

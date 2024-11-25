@@ -18,6 +18,7 @@ impl<R: io::Read + io::Seek> PrefixIter<R> {
     }
 
     /// Returns the next entry that starts with the given prefix.
+    #[allow(clippy::should_implement_trait)] // We return interior references
     pub fn next(&mut self) -> crate::Result<Option<(&[u8], &[u8])>> {
         let entry = if self.move_on_first_prefix {
             self.move_on_first_prefix = false;
@@ -49,6 +50,7 @@ impl<R: io::Read + io::Seek> RevPrefixIter<R> {
     }
 
     /// Returns the next entry that starts with the given prefix.
+    #[allow(clippy::should_implement_trait)] // We return interior references
     pub fn next(&mut self) -> crate::Result<Option<(&[u8], &[u8])>> {
         let entry = if self.move_on_last_prefix {
             self.move_on_last_prefix = false;

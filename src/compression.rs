@@ -102,6 +102,7 @@ fn zlib_decompress<R: io::Read>(data: R, out: &mut Vec<u8>) -> io::Result<()> {
 }
 
 #[cfg(not(feature = "zlib"))]
+#[allow(clippy::ptr_arg)] // it doesn't understand that I need the same signature for all function
 fn zlib_decompress<R: io::Read>(_data: R, _out: &mut Vec<u8>) -> io::Result<()> {
     Err(io::Error::new(io::ErrorKind::Other, "unsupported zlib decompression"))
 }
@@ -181,6 +182,7 @@ fn zstd_decompress<R: io::Read>(data: R, out: &mut Vec<u8>) -> io::Result<()> {
 }
 
 #[cfg(not(feature = "zstd"))]
+#[allow(clippy::ptr_arg)] // it doesn't understand that I need the same signature for all function
 fn zstd_decompress<R: io::Read>(_data: R, _out: &mut Vec<u8>) -> io::Result<()> {
     Err(io::Error::new(io::ErrorKind::Other, "unsupported zstd decompression"))
 }
@@ -206,6 +208,7 @@ fn lz4_decompress<R: io::Read>(data: R, out: &mut Vec<u8>) -> io::Result<()> {
 }
 
 #[cfg(not(feature = "lz4"))]
+#[allow(clippy::ptr_arg)] // it doesn't understand that I need the same signature for all function
 fn lz4_decompress<R: io::Read>(_data: R, _out: &mut Vec<u8>) -> io::Result<()> {
     Err(io::Error::new(io::ErrorKind::Other, "unsupported lz4 decompression"))
 }

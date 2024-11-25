@@ -240,8 +240,8 @@ impl Entries {
     /// Inserts a new entry into the buffer, if there is not
     /// enough space for it to be stored, we double the buffer size.
     pub fn insert(&mut self, key: &[u8], data: &[u8]) {
-        assert!(key.len() <= u32::max_value() as usize);
-        assert!(data.len() <= u32::max_value() as usize);
+        assert!(key.len() <= u32::MAX as usize);
+        assert!(data.len() <= u32::MAX as usize);
 
         if self.fits(key, data) {
             // We store the key and data bytes one after the other at the back of the buffer.
@@ -653,6 +653,7 @@ where
     }
 
     /// A helper function to extract the readers and the merge function.
+    #[allow(clippy::type_complexity)] // Return type is not THAT complex
     fn extract_reader_cursors_and_merger(
         mut self,
     ) -> crate::Result<(Vec<ReaderCursor<CC::Chunk>>, MF), MF::Error> {

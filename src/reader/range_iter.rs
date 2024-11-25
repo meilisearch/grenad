@@ -24,6 +24,7 @@ impl<R: io::Read + io::Seek> RangeIter<R> {
     }
 
     /// Returns the next entry that is inside of the given range.
+    #[allow(clippy::should_implement_trait)] // We return interior references
     pub fn next(&mut self) -> crate::Result<Option<(&[u8], &[u8])>> {
         let entry = if self.move_on_start {
             self.move_on_start = false;
@@ -75,6 +76,7 @@ impl<R: io::Read + io::Seek> RevRangeIter<R> {
     }
 
     /// Returns the next entry that is inside of the given range.
+    #[allow(clippy::should_implement_trait)] // We return interior references
     pub fn next(&mut self) -> crate::Result<Option<(&[u8], &[u8])>> {
         let entry = if self.move_on_start {
             self.move_on_start = false;
