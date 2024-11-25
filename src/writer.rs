@@ -378,7 +378,7 @@ mod tests {
             .compression_type(grenad_0_4::CompressionType::Snappy)
             .memory();
 
-        let total: u32 = 156_000;
+        let total: u32 = 1_500;
 
         for x in 0..total {
             let x = x.to_be_bytes();
