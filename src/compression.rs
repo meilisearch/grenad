@@ -4,10 +4,11 @@ use std::str::FromStr;
 use std::{fmt, io};
 
 /// The different supported types of compression.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum CompressionType {
     /// Do not compress the blocks.
+    #[default]
     None = 0,
     /// Use the [`snap`] crate to de/compress the blocks.
     ///
@@ -52,12 +53,6 @@ impl FromStr for CompressionType {
             "snappy" => Ok(CompressionType::Snappy),
             _ => Err(InvalidCompressionType),
         }
-    }
-}
-
-impl Default for CompressionType {
-    fn default() -> CompressionType {
-        CompressionType::None
     }
 }
 
@@ -107,6 +102,7 @@ fn zlib_decompress<R: io::Read>(data: R, out: &mut Vec<u8>) -> io::Result<()> {
 }
 
 #[cfg(not(feature = "zlib"))]
+#[allow(clippy::ptr_arg)] // it doesn't understand that I need the same signature for all function
 fn zlib_decompress<R: io::Read>(_data: R, _out: &mut Vec<u8>) -> io::Result<()> {
     Err(io::Error::new(io::ErrorKind::Other, "unsupported zlib decompression"))
 }
@@ -186,6 +182,7 @@ fn zstd_decompress<R: io::Read>(data: R, out: &mut Vec<u8>) -> io::Result<()> {
 }
 
 #[cfg(not(feature = "zstd"))]
+#[allow(clippy::ptr_arg)] // it doesn't understand that I need the same signature for all function
 fn zstd_decompress<R: io::Read>(_data: R, _out: &mut Vec<u8>) -> io::Result<()> {
     Err(io::Error::new(io::ErrorKind::Other, "unsupported zstd decompression"))
 }
@@ -211,6 +208,7 @@ fn lz4_decompress<R: io::Read>(data: R, out: &mut Vec<u8>) -> io::Result<()> {
 }
 
 #[cfg(not(feature = "lz4"))]
+#[allow(clippy::ptr_arg)] // it doesn't understand that I need the same signature for all function
 fn lz4_decompress<R: io::Read>(_data: R, _out: &mut Vec<u8>) -> io::Result<()> {
     Err(io::Error::new(io::ErrorKind::Other, "unsupported lz4 decompression"))
 }

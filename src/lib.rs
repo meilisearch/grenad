@@ -72,23 +72,25 @@
 //! use std::convert::TryInto;
 //! use std::io::Cursor;
 //!
-//! use grenad::{MergerBuilder, Reader, Writer};
+//! use grenad::{MergerBuilder, MergeFunction, Reader, Writer};
 //!
 //! // This merge function:
 //! //  - parses u32s from native-endian bytes,
 //! //  - wrapping sums them and,
 //! //  - outputs the result as native-endian bytes.
-//! fn wrapping_sum_u32s<'a>(
-//!  _key: &[u8],
-//!  values: &[Cow<'a, [u8]>],
-//! ) -> Result<Cow<'a, [u8]>, TryFromSliceError>
-//! {
-//!     let mut output: u32 = 0;
-//!     for bytes in values.iter().map(AsRef::as_ref) {
-//!         let num = bytes.try_into().map(u32::from_ne_bytes)?;
-//!         output = output.wrapping_add(num);
+//! struct WrappingSumU32s;
+//!
+//! impl MergeFunction for WrappingSumU32s {
+//!     type Error = TryFromSliceError;
+//!
+//!     fn merge<'a>(&self, key: &[u8], values: &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, Self::Error> {
+//!         let mut output: u32 = 0;
+//!         for bytes in values.iter().map(AsRef::as_ref) {
+//!             let num = bytes.try_into().map(u32::from_ne_bytes)?;
+//!             output = output.wrapping_add(num);
+//!         }
+//!         Ok(Cow::Owned(output.to_ne_bytes().to_vec()))
 //!     }
-//!     Ok(Cow::Owned(output.to_ne_bytes().to_vec()))
 //! }
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -115,7 +117,7 @@
 //!
 //! // We create a merger that will sum our u32s when necessary,
 //! // and we add our readers to the list of readers to merge.
-//! let merger_builder = MergerBuilder::new(wrapping_sum_u32s);
+//! let merger_builder = MergerBuilder::new(WrappingSumU32s);
 //! let merger = merger_builder.add(readera).add(readerb).add(readerc).build();
 //!
 //! // We can iterate over the entries in key-order.
@@ -142,28 +144,30 @@
 //! use std::borrow::Cow;
 //! use std::convert::TryInto;
 //!
-//! use grenad::{CursorVec, SorterBuilder};
+//! use grenad::{CursorVec, MergeFunction, SorterBuilder};
 //!
 //! // This merge function:
 //! //  - parses u32s from native-endian bytes,
 //! //  - wrapping sums them and,
 //! //  - outputs the result as native-endian bytes.
-//! fn wrapping_sum_u32s<'a>(
-//!  _key: &[u8],
-//!  values: &[Cow<'a, [u8]>],
-//! ) -> Result<Cow<'a, [u8]>, TryFromSliceError>
-//! {
-//!     let mut output: u32 = 0;
-//!     for bytes in values.iter().map(AsRef::as_ref) {
-//!         let num = bytes.try_into().map(u32::from_ne_bytes)?;
-//!         output = output.wrapping_add(num);
+//! struct WrappingSumU32s;
+//!
+//! impl MergeFunction for WrappingSumU32s {
+//!     type Error = TryFromSliceError;
+//!
+//!     fn merge<'a>(&self, key: &[u8], values: &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, Self::Error> {
+//!         let mut output: u32 = 0;
+//!         for bytes in values.iter().map(AsRef::as_ref) {
+//!             let num = bytes.try_into().map(u32::from_ne_bytes)?;
+//!             output = output.wrapping_add(num);
+//!         }
+//!         Ok(Cow::Owned(output.to_ne_bytes().to_vec()))
 //!     }
-//!     Ok(Cow::Owned(output.to_ne_bytes().to_vec()))
 //! }
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! // We create a sorter that will sum our u32s when necessary.
-//! let mut sorter = SorterBuilder::new(wrapping_sum_u32s).chunk_creator(CursorVec).build();
+//! let mut sorter = SorterBuilder::new(WrappingSumU32s).chunk_creator(CursorVec).build();
 //!
 //! // We insert multiple entries with the same key but different values
 //! // in arbitrary order, the sorter will take care of merging them for us.
@@ -187,7 +191,7 @@
 #[cfg(test)]
 #[macro_use]
 extern crate quickcheck;
-
+use std::convert::Infallible;
 use std::mem;
 
 mod block;
@@ -195,6 +199,7 @@ mod block_writer;
 mod compression;
 mod count_write;
 mod error;
+mod merge_function;
 mod merger;
 mod metadata;
 mod reader;
@@ -204,6 +209,7 @@ mod writer;
 
 pub use self::compression::CompressionType;
 pub use self::error::Error;
+pub use self::merge_function::MergeFunction;
 pub use self::merger::{Merger, MergerBuilder, MergerIter};
 pub use self::metadata::FileVersion;
 pub use self::reader::{PrefixIter, RangeIter, Reader, ReaderCursor, RevPrefixIter, RevRangeIter};
@@ -214,10 +220,12 @@ pub use self::sorter::{
 };
 pub use self::writer::{Writer, WriterBuilder};
 
+pub type Result<T, U = Infallible> = std::result::Result<T, Error<U>>;
+
 /// Sometimes we need to use an unsafe trick to make the compiler happy.
 /// You can read more about the issue [on the Rust's Github issues].
 ///
 /// [on the Rust's Github issues]: https://github.com/rust-lang/rust/issues/47680
 unsafe fn transmute_entry_to_static(key: &[u8], val: &[u8]) -> (&'static [u8], &'static [u8]) {
-    (mem::transmute(key), mem::transmute(val))
+    (mem::transmute::<&[u8], &'static [u8]>(key), mem::transmute::<&[u8], &'static [u8]>(val))
 }

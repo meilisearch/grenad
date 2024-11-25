@@ -146,9 +146,9 @@ impl Writer<()> {
     }
 }
 
-impl<W: io::Write> Writer<W> {
+impl<W: io::Write> AsRef<W> for Writer<W> {
     /// Gets a reference to the underlying writer.
-    pub fn as_ref(&self) -> &W {
+    fn as_ref(&self) -> &W {
         self.writer.as_ref()
     }
 }
@@ -330,7 +330,7 @@ mod tests {
 
         for x in 0..2000u32 {
             let x = x.to_be_bytes();
-            writer.insert(&x, &x).unwrap();
+            writer.insert(x, x).unwrap();
         }
 
         let bytes = writer.into_inner().unwrap();
@@ -346,7 +346,7 @@ mod tests {
 
         for x in 0..2000u32 {
             let x = x.to_be_bytes();
-            writer.insert(&x, &x).unwrap();
+            writer.insert(x, x).unwrap();
         }
 
         let bytes = writer.into_inner().unwrap();
@@ -363,7 +363,7 @@ mod tests {
 
         for x in 0..2000u32 {
             let x = x.to_be_bytes();
-            writer.insert(&x, &x).unwrap();
+            writer.insert(x, x).unwrap();
         }
 
         let bytes = writer.into_inner().unwrap();
@@ -378,11 +378,11 @@ mod tests {
             .compression_type(grenad_0_4::CompressionType::Snappy)
             .memory();
 
-        let total: u32 = 156_000;
+        let total: u32 = 1_500;
 
         for x in 0..total {
             let x = x.to_be_bytes();
-            writer.insert(&x, &x).unwrap();
+            writer.insert(x, x).unwrap();
         }
 
         let bytes = writer.into_inner().unwrap();

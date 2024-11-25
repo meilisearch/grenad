@@ -94,8 +94,8 @@ impl BlockWriter {
     /// Insert a key that must be greater than the previously added one.
     pub fn insert(&mut self, key: &[u8], val: &[u8]) {
         debug_assert!(self.index_key_counter <= self.index_key_interval.get());
-        assert!(key.len() <= u32::max_value() as usize);
-        assert!(val.len() <= u32::max_value() as usize);
+        assert!(key.len() <= u32::MAX as usize);
+        assert!(val.len() <= u32::MAX as usize);
 
         if self.index_key_counter == self.index_key_interval.get() {
             self.index_offsets.push(self.buffer.len() as u64);
@@ -106,7 +106,7 @@ impl BlockWriter {
         // and save the current key to become the last key.
         match &mut self.last_key {
             Some(last_key) => {
-                assert!(key > last_key, "{:?} must be greater than {:?}", key, last_key);
+                assert!(key > last_key.as_slice(), "{:?} must be greater than {:?}", key, last_key);
                 last_key.clear();
                 last_key.extend_from_slice(key);
             }

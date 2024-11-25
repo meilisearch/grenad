@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::{Error, ReaderCursor};
+use crate::ReaderCursor;
 
 /// An iterator that is able to yield all the entries with
 /// a key that starts with a given prefix.
@@ -18,7 +18,8 @@ impl<R: io::Read + io::Seek> PrefixIter<R> {
     }
 
     /// Returns the next entry that starts with the given prefix.
-    pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
+    #[allow(clippy::should_implement_trait)] // We return interior references
+    pub fn next(&mut self) -> crate::Result<Option<(&[u8], &[u8])>> {
         let entry = if self.move_on_first_prefix {
             self.move_on_first_prefix = false;
             self.cursor.move_on_key_greater_than_or_equal_to(&self.prefix)?
@@ -49,7 +50,8 @@ impl<R: io::Read + io::Seek> RevPrefixIter<R> {
     }
 
     /// Returns the next entry that starts with the given prefix.
-    pub fn next(&mut self) -> Result<Option<(&[u8], &[u8])>, Error> {
+    #[allow(clippy::should_implement_trait)] // We return interior references
+    pub fn next(&mut self) -> crate::Result<Option<(&[u8], &[u8])>> {
         let entry = if self.move_on_last_prefix {
             self.move_on_last_prefix = false;
             move_on_last_prefix(&mut self.cursor, self.prefix.clone())?
@@ -68,7 +70,7 @@ impl<R: io::Read + io::Seek> RevPrefixIter<R> {
 fn move_on_last_prefix<R: io::Read + io::Seek>(
     cursor: &mut ReaderCursor<R>,
     prefix: Vec<u8>,
-) -> Result<Option<(&[u8], &[u8])>, Error> {
+) -> crate::Result<Option<(&[u8], &[u8])>> {
     match advance_key(prefix) {
         Some(next_prefix) => match cursor.move_on_key_lower_than_or_equal_to(&next_prefix)? {
             Some((k, _)) if k == next_prefix => cursor.move_on_prev(),
@@ -108,7 +110,7 @@ mod tests {
         let mut writer = Writer::memory();
         for x in (10..24000u32).step_by(3) {
             let x = x.to_be_bytes();
-            writer.insert(&x, &x).unwrap();
+            writer.insert(x, x).unwrap();
         }
 
         let bytes = writer.into_inner().unwrap();
