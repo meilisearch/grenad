@@ -72,23 +72,25 @@
 //! use std::convert::TryInto;
 //! use std::io::Cursor;
 //!
-//! use grenad::{MergerBuilder, Reader, Writer};
+//! use grenad::{MergerBuilder, MergeFunction, Reader, Writer};
 //!
 //! // This merge function:
 //! //  - parses u32s from native-endian bytes,
 //! //  - wrapping sums them and,
 //! //  - outputs the result as native-endian bytes.
-//! fn wrapping_sum_u32s<'a>(
-//!  _key: &[u8],
-//!  values: &[Cow<'a, [u8]>],
-//! ) -> Result<Cow<'a, [u8]>, TryFromSliceError>
-//! {
-//!     let mut output: u32 = 0;
-//!     for bytes in values.iter().map(AsRef::as_ref) {
-//!         let num = bytes.try_into().map(u32::from_ne_bytes)?;
-//!         output = output.wrapping_add(num);
+//! struct WrappingSumU32s;
+//!
+//! impl MergeFunction for WrappingSumU32s {
+//!     type Error = TryFromSliceError;
+//!
+//!     fn merge<'a>(&self, key: &[u8], values: &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, Self::Error> {
+//!         let mut output: u32 = 0;
+//!         for bytes in values.iter().map(AsRef::as_ref) {
+//!             let num = bytes.try_into().map(u32::from_ne_bytes)?;
+//!             output = output.wrapping_add(num);
+//!         }
+//!         Ok(Cow::Owned(output.to_ne_bytes().to_vec()))
 //!     }
-//!     Ok(Cow::Owned(output.to_ne_bytes().to_vec()))
 //! }
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -115,7 +117,7 @@
 //!
 //! // We create a merger that will sum our u32s when necessary,
 //! // and we add our readers to the list of readers to merge.
-//! let merger_builder = MergerBuilder::new(wrapping_sum_u32s);
+//! let merger_builder = MergerBuilder::new(WrappingSumU32s);
 //! let merger = merger_builder.add(readera).add(readerb).add(readerc).build();
 //!
 //! // We can iterate over the entries in key-order.
@@ -142,28 +144,30 @@
 //! use std::borrow::Cow;
 //! use std::convert::TryInto;
 //!
-//! use grenad::{CursorVec, SorterBuilder};
+//! use grenad::{CursorVec, MergeFunction, SorterBuilder};
 //!
 //! // This merge function:
 //! //  - parses u32s from native-endian bytes,
 //! //  - wrapping sums them and,
 //! //  - outputs the result as native-endian bytes.
-//! fn wrapping_sum_u32s<'a>(
-//!  _key: &[u8],
-//!  values: &[Cow<'a, [u8]>],
-//! ) -> Result<Cow<'a, [u8]>, TryFromSliceError>
-//! {
-//!     let mut output: u32 = 0;
-//!     for bytes in values.iter().map(AsRef::as_ref) {
-//!         let num = bytes.try_into().map(u32::from_ne_bytes)?;
-//!         output = output.wrapping_add(num);
+//! struct WrappingSumU32s;
+//!
+//! impl MergeFunction for WrappingSumU32s {
+//!     type Error = TryFromSliceError;
+//!
+//!     fn merge<'a>(&self, key: &[u8], values: &[Cow<'a, [u8]>]) -> Result<Cow<'a, [u8]>, Self::Error> {
+//!         let mut output: u32 = 0;
+//!         for bytes in values.iter().map(AsRef::as_ref) {
+//!             let num = bytes.try_into().map(u32::from_ne_bytes)?;
+//!             output = output.wrapping_add(num);
+//!         }
+//!         Ok(Cow::Owned(output.to_ne_bytes().to_vec()))
 //!     }
-//!     Ok(Cow::Owned(output.to_ne_bytes().to_vec()))
 //! }
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! // We create a sorter that will sum our u32s when necessary.
-//! let mut sorter = SorterBuilder::new(wrapping_sum_u32s).chunk_creator(CursorVec).build();
+//! let mut sorter = SorterBuilder::new(WrappingSumU32s).chunk_creator(CursorVec).build();
 //!
 //! // We insert multiple entries with the same key but different values
 //! // in arbitrary order, the sorter will take care of merging them for us.
