@@ -7,6 +7,7 @@ use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::mem::{align_of, size_of};
 use std::num::NonZeroUsize;
+use std::ptr::NonNull;
 use std::{cmp, io, ops, slice};
 
 use bytemuck::{cast_slice, cast_slice_mut, Pod, Zeroable};
@@ -376,7 +377,10 @@ struct EntryBound {
 }
 
 /// Represents an `EntryBound` aligned buffer.
-struct EntryBoundAlignedBuffer(&'static mut [u8]);
+struct EntryBoundAlignedBuffer {
+    data: NonNull<u8>,
+    len: usize,
+}
 
 impl EntryBoundAlignedBuffer {
     /// Allocates a new buffer of the given size, it is correctly aligned to store `EntryBound`s.
@@ -385,13 +389,14 @@ impl EntryBoundAlignedBuffer {
         let size = (size + entry_bound_size - 1) / entry_bound_size * entry_bound_size;
         let layout = Layout::from_size_align(size, align_of::<EntryBound>()).unwrap();
         let ptr = unsafe { alloc(layout) };
-        assert!(
-            !ptr.is_null(),
-            "the allocator is unable to allocate that much memory ({} bytes requested)",
-            size
-        );
-        let slice = unsafe { slice::from_raw_parts_mut(ptr, size) };
-        EntryBoundAlignedBuffer(slice)
+        let Some(ptr) = NonNull::new(ptr) else {
+            panic!(
+                "the allocator is unable to allocate that much memory ({} bytes requested)",
+                size
+            );
+        };
+
+        EntryBoundAlignedBuffer { data: ptr, len: size }
     }
 }
 
@@ -399,20 +404,21 @@ impl ops::Deref for EntryBoundAlignedBuffer {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        self.0
+        unsafe { slice::from_raw_parts(self.data.as_ptr(), self.len) }
     }
 }
 
 impl ops::DerefMut for EntryBoundAlignedBuffer {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0
+        unsafe { slice::from_raw_parts_mut(self.data.as_ptr(), self.len) }
     }
 }
 
 impl Drop for EntryBoundAlignedBuffer {
     fn drop(&mut self) {
-        let layout = Layout::from_size_align(self.0.len(), align_of::<EntryBound>()).unwrap();
-        unsafe { dealloc(self.0.as_mut_ptr(), layout) }
+        let layout = Layout::from_size_align(self.len, align_of::<EntryBound>()).unwrap();
+
+        unsafe { dealloc(self.data.as_ptr(), layout) }
     }
 }
 
