@@ -386,7 +386,7 @@ impl EntryBoundAlignedBuffer {
     /// Allocates a new buffer of the given size, it is correctly aligned to store `EntryBound`s.
     fn new(size: usize) -> EntryBoundAlignedBuffer {
         let entry_bound_size = size_of::<EntryBound>();
-        let size = (size + entry_bound_size - 1) / entry_bound_size * entry_bound_size;
+        let size = size.div_ceil(entry_bound_size) * entry_bound_size;
         let layout = Layout::from_size_align(size, align_of::<EntryBound>()).unwrap();
         let ptr = unsafe { alloc(layout) };
         let Some(ptr) = NonNull::new(ptr) else {
