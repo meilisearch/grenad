@@ -20,8 +20,8 @@ tempfile = { version = "3.15.0", optional = true }
 zstd = { version = "0.13.2", optional = true }
 
 [dev-dependencies]
-criterion = { version = "0.3", features = ["html_reports"] }
-quickcheck = "0.9"
+criterion = { version = "0.5", features = ["html_reports"] }
+quickcheck = "1.0"
 rand = "0.8.5"
 grenad-0-4 = { version = "0.4.7", package = "grenad" }
 
