@@ -82,7 +82,7 @@ where
     }
 }
 
-pub fn compress(type_: CompressionType, level: u32, data: &[u8]) -> io::Result<Cow<[u8]>> {
+pub fn compress(type_: CompressionType, level: u32, data: &[u8]) -> io::Result<Cow<'_, [u8]>> {
     match type_ {
         CompressionType::None => Ok(Cow::Borrowed(data)),
         CompressionType::Zlib => zlib_compress(data, level),
@@ -104,11 +104,11 @@ fn zlib_decompress<R: io::Read>(data: R, out: &mut Vec<u8>) -> io::Result<()> {
 #[cfg(not(feature = "zlib"))]
 #[allow(clippy::ptr_arg)] // it doesn't understand that I need the same signature for all function
 fn zlib_decompress<R: io::Read>(_data: R, _out: &mut Vec<u8>) -> io::Result<()> {
-    Err(io::Error::new(io::ErrorKind::Other, "unsupported zlib decompression"))
+    Err(io::Error::other("unsupported zlib decompression"))
 }
 
 #[cfg(feature = "zlib")]
-fn zlib_compress(data: &[u8], level: u32) -> io::Result<Cow<[u8]>> {
+fn zlib_compress(data: &[u8], level: u32) -> io::Result<Cow<'_, [u8]>> {
     use std::io::Write;
     let compression = flate2::Compression::new(level);
     let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), compression);
@@ -117,8 +117,8 @@ fn zlib_compress(data: &[u8], level: u32) -> io::Result<Cow<[u8]>> {
 }
 
 #[cfg(not(feature = "zlib"))]
-fn zlib_compress(_data: &[u8], _level: u32) -> io::Result<Cow<[u8]>> {
-    Err(io::Error::new(io::ErrorKind::Other, "unsupported zlib compression"))
+fn zlib_compress(_data: &[u8], _level: u32) -> io::Result<Cow<'_, [u8]>> {
+    Err(io::Error::other("unsupported zlib compression"))
 }
 
 // --------- snappy pre-0.5 ---------
@@ -138,7 +138,7 @@ fn snappy_pre_05_decompress<R: io::Read>(_data: R, _out: &mut Vec<u8>) -> io::Re
 }
 
 #[cfg(feature = "snappy")]
-fn snappy_pre_05_compress(data: &[u8], _level: u32) -> io::Result<Cow<[u8]>> {
+fn snappy_pre_05_compress(data: &[u8], _level: u32) -> io::Result<Cow<'_, [u8]>> {
     let mut decoder = snap::raw::Encoder::new();
     decoder.compress_vec(data).map_err(Into::into).map(Cow::Owned)
 }
@@ -162,7 +162,7 @@ fn snappy_decompress<R: io::Read>(_data: R, _out: &mut Vec<u8>) -> io::Result<()
 }
 
 #[cfg(feature = "snappy")]
-fn snappy_compress(data: &[u8], _level: u32) -> io::Result<Cow<[u8]>> {
+fn snappy_compress(data: &[u8], _level: u32) -> io::Result<Cow<'_, [u8]>> {
     use io::Write;
     let mut encoder = snap::write::FrameEncoder::new(Vec::new());
     encoder.write_all(data)?;
@@ -170,7 +170,7 @@ fn snappy_compress(data: &[u8], _level: u32) -> io::Result<Cow<[u8]>> {
 }
 
 #[cfg(not(feature = "snappy"))]
-fn snappy_compress(_data: &[u8], _level: u32) -> io::Result<Cow<[u8]>> {
+fn snappy_compress(_data: &[u8], _level: u32) -> io::Result<Cow<'_, [u8]>> {
     Err(io::Error::new(io::ErrorKind::Other, "unsupported snappy compression"))
 }
 
@@ -184,19 +184,19 @@ fn zstd_decompress<R: io::Read>(data: R, out: &mut Vec<u8>) -> io::Result<()> {
 #[cfg(not(feature = "zstd"))]
 #[allow(clippy::ptr_arg)] // it doesn't understand that I need the same signature for all function
 fn zstd_decompress<R: io::Read>(_data: R, _out: &mut Vec<u8>) -> io::Result<()> {
-    Err(io::Error::new(io::ErrorKind::Other, "unsupported zstd decompression"))
+    Err(io::Error::other("unsupported zstd decompression"))
 }
 
 #[cfg(feature = "zstd")]
-fn zstd_compress(data: &[u8], level: u32) -> io::Result<Cow<[u8]>> {
+fn zstd_compress(data: &[u8], level: u32) -> io::Result<Cow<'_, [u8]>> {
     let mut buffer = Vec::new();
     zstd::stream::copy_encode(data, &mut buffer, level as i32)?;
     Ok(Cow::Owned(buffer))
 }
 
 #[cfg(not(feature = "zstd"))]
-fn zstd_compress(_data: &[u8], _level: u32) -> io::Result<Cow<[u8]>> {
-    Err(io::Error::new(io::ErrorKind::Other, "unsupported zstd compression"))
+fn zstd_compress(_data: &[u8], _level: u32) -> io::Result<Cow<'_, [u8]>> {
+    Err(io::Error::other("unsupported zstd compression"))
 }
 
 // --------- lz4 ---------
@@ -210,19 +210,19 @@ fn lz4_decompress<R: io::Read>(data: R, out: &mut Vec<u8>) -> io::Result<()> {
 #[cfg(not(feature = "lz4"))]
 #[allow(clippy::ptr_arg)] // it doesn't understand that I need the same signature for all function
 fn lz4_decompress<R: io::Read>(_data: R, _out: &mut Vec<u8>) -> io::Result<()> {
-    Err(io::Error::new(io::ErrorKind::Other, "unsupported lz4 decompression"))
+    Err(io::Error::other("unsupported lz4 decompression"))
 }
 
 #[cfg(feature = "lz4")]
-fn lz4_compress(mut data: &[u8], _level: u32) -> io::Result<Cow<[u8]>> {
+fn lz4_compress(mut data: &[u8], _level: u32) -> io::Result<Cow<'_, [u8]>> {
     let mut wtr = lz4_flex::frame::FrameEncoder::new(Vec::new());
     io::copy(&mut data, &mut wtr)?;
     wtr.finish().map(Cow::Owned).map_err(Into::into)
 }
 
 #[cfg(not(feature = "lz4"))]
-fn lz4_compress(_data: &[u8], _level: u32) -> io::Result<Cow<[u8]>> {
-    Err(io::Error::new(io::ErrorKind::Other, "unsupported lz4 compression"))
+fn lz4_compress(_data: &[u8], _level: u32) -> io::Result<Cow<'_, [u8]>> {
+    Err(io::Error::other("unsupported lz4 compression"))
 }
 
 #[cfg(test)]

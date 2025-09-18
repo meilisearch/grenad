@@ -5,7 +5,7 @@ use std::ops::Deref;
 
 use crate::varint::varint_encode32;
 
-const DEFAULT_INDEX_KEY_INTERVAL: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(8) };
+const DEFAULT_INDEX_KEY_INTERVAL: NonZeroUsize = NonZeroUsize::new(8).unwrap();
 
 #[derive(Debug, Copy, Clone)]
 pub struct BlockWriterBuilder {
@@ -123,7 +123,7 @@ impl BlockWriter {
         self.index_key_counter += 1;
     }
 
-    pub fn finish(&mut self) -> BlockBuffer {
+    pub fn finish(&mut self) -> BlockBuffer<'_> {
         // We write the index offsets at the end of the file,
         // followed by the number of index offsets.
         let index_offsets_count: u32 = self.index_offsets.len().try_into().unwrap();
